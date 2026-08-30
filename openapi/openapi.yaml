@@ -1,0 +1,527 @@
+openapi: 3.0.3
+info:
+  title: Marketplace API
+  version: 1.0.0
+  description: >-
+    Marketplace API (products + orders) with cursor pagination, idempotent order
+    creation, and RFC 9457 problem+json errors. The OpenAPI contract is the single
+    source of truth; the runtime NestJS app validates every request and response
+    against it with express-openapi-validator at the boundary.
+servers:
+  - url: http://localhost:3000
+    description: Local development server
+security: []
+tags:
+  - name: products
+    description: Product catalog — browse, look up, create and update products.
+  - name: orders
+    description: Orders — cursor-paged listing and idempotent creation.
+paths:
+  /products:
+    get:
+      operationId: listProducts
+      summary: List products
+      tags:
+        - products
+      parameters:
+        - $ref: '#/components/parameters/LimitParam'
+        - $ref: '#/components/parameters/CursorParam'
+      responses:
+        '200':
+          description: A page of products.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProductPage'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    post:
+      operationId: createProduct
+      summary: Create a product
+      tags:
+        - products
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProductCreate'
+      responses:
+        '201':
+          description: The created product.
+          headers:
+            Location:
+              description: Path of the newly created product.
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Product'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /products/{id}:
+    get:
+      operationId: getProduct
+      summary: Get a product by id
+      tags:
+        - products
+      parameters:
+        - $ref: '#/components/parameters/IdParam'
+      responses:
+        '200':
+          description: The requested product.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Product'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    patch:
+      operationId: updateProduct
+      summary: Partially update a product
+      tags:
+        - products
+      parameters:
+        - $ref: '#/components/parameters/IdParam'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProductPatch'
+      responses:
+        '200':
+          description: The updated product.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Product'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /orders:
+    get:
+      operationId: listOrders
+      summary: List orders
+      tags:
+        - orders
+      parameters:
+        - $ref: '#/components/parameters/LimitParam'
+        - $ref: '#/components/parameters/CursorParam'
+      responses:
+        '200':
+          description: A page of orders.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrderPage'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    post:
+      operationId: createOrder
+      summary: Create an order (idempotent)
+      tags:
+        - orders
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: true
+          description: >-
+            Client-generated unique key for one logical order attempt. Repeating
+            the same key with the same request body replays the original response
+            (with the Idempotency-Replay header set to true); the same key with a
+            different body is rejected with 422. Use a fresh UUID per new order.
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 255
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateOrder'
+      responses:
+        '201':
+          description: The created order.
+          headers:
+            Location:
+              description: Path of the newly created order.
+              schema:
+                type: string
+            Idempotency-Replay:
+              description: >-
+                Present and true when this response replays a previously
+                created order for the same Idempotency-Key.
+              schema:
+                type: boolean
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Order'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /orders/{id}:
+    get:
+      operationId: getOrder
+      summary: Get an order by id
+      tags:
+        - orders
+      parameters:
+        - $ref: '#/components/parameters/IdParam'
+      responses:
+        '200':
+          description: The requested order.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Order'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+components:
+  parameters:
+    LimitParam:
+      name: limit
+      in: query
+      required: false
+      description: Maximum number of items to return in one page.
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 20
+    CursorParam:
+      name: cursor
+      in: query
+      required: false
+      description: >-
+        Opaque pagination cursor returned as `next_cursor` by a previous list
+        response. Clients must treat it as opaque and never construct or
+        modify it.
+      schema:
+        type: string
+    IdParam:
+      name: id
+      in: path
+      required: true
+      description: Positive integer resource identifier.
+      schema:
+        type: integer
+        minimum: 1
+  responses:
+    BadRequest:
+      description: The request was malformed or failed schema validation.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    NotFound:
+      description: The requested resource does not exist.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    Conflict:
+      description: The request conflicts with the current state of the resource.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    Unprocessable:
+      description: The request was well-formed but failed domain validation.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    InternalError:
+      description: An unexpected server error occurred.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+  schemas:
+    Problem:
+      type: object
+      description: RFC 9457 problem+json error body.
+      required:
+        - type
+        - title
+        - status
+        - detail
+        - instance
+      properties:
+        type:
+          type: string
+          format: uri
+          description: URI identifying the problem type.
+        title:
+          type: string
+          description: Short, human-readable summary of the problem type.
+        status:
+          type: integer
+          description: HTTP status code generated for this occurrence.
+        detail:
+          type: string
+          description: Human-readable explanation specific to this occurrence.
+        instance:
+          type: string
+          description: URI reference identifying the specific occurrence.
+        code:
+          type: string
+          description: Stable machine-readable domain error code, when applicable.
+        errors:
+          type: array
+          description: Per-field validation errors, when applicable.
+          items:
+            $ref: '#/components/schemas/ProblemErrorItem'
+    ProblemErrorItem:
+      type: object
+      description: A single field-level validation error.
+      required:
+        - path
+        - message
+        - errorCode
+      properties:
+        path:
+          type: string
+        message:
+          type: string
+        errorCode:
+          type: string
+    Product:
+      type: object
+      required:
+        - id
+        - title
+        - price_cents
+        - currency
+        - sku
+        - created_at
+      properties:
+        id:
+          type: integer
+        title:
+          type: string
+        price_cents:
+          type: integer
+          description: Price in the smallest currency unit (e.g. cents).
+        currency:
+          type: string
+          description: ISO-4217 currency code.
+        sku:
+          type: string
+        description:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+      example:
+        id: 1
+        title: Mechanical Keyboard
+        price_cents: 260000
+        currency: USD
+        sku: KB-001
+        description: Mechanical keyboard with Brown switches
+        created_at: '2026-08-20T10:00:00Z'
+    ProductCreate:
+      type: object
+      additionalProperties: false
+      required:
+        - title
+        - price_cents
+        - currency
+        - sku
+      properties:
+        title:
+          type: string
+          minLength: 1
+        price_cents:
+          type: integer
+          minimum: 0
+          description: Price in the smallest currency unit (e.g. cents).
+        currency:
+          type: string
+          minLength: 3
+          maxLength: 3
+          description: ISO-4217 currency code.
+        sku:
+          type: string
+          minLength: 1
+        description:
+          type: string
+      example:
+        title: Wireless Mouse
+        price_cents: 125000
+        currency: USD
+        sku: MO-002
+        description: Ergonomic wireless mouse
+    ProductPatch:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      description: >-
+        Partial product update — supply at least one field. Only the fields
+        present are changed; id and created_at are server-owned.
+      properties:
+        title:
+          type: string
+          minLength: 1
+        price_cents:
+          type: integer
+          minimum: 0
+        currency:
+          type: string
+          minLength: 3
+          maxLength: 3
+        sku:
+          type: string
+          minLength: 1
+        description:
+          type: string
+      example:
+        price_cents: 199000
+    CursorPage:
+      type: object
+      description: Base shape for cursor-paginated list responses.
+      required:
+        - next_cursor
+      properties:
+        next_cursor:
+          type: string
+          nullable: true
+          description: >-
+            Opaque cursor for the next page, or null when there are no more
+            results.
+    ProductPage:
+      allOf:
+        - $ref: '#/components/schemas/CursorPage'
+        - type: object
+          required:
+            - items
+          properties:
+            items:
+              type: array
+              items:
+                $ref: '#/components/schemas/Product'
+    CreateOrderItem:
+      type: object
+      additionalProperties: false
+      required:
+        - product_id
+        - quantity
+      properties:
+        product_id:
+          type: integer
+          minimum: 1
+        quantity:
+          type: integer
+          minimum: 1
+    CreateOrder:
+      type: object
+      additionalProperties: false
+      required:
+        - items
+      properties:
+        items:
+          type: array
+          minItems: 1
+          maxItems: 100
+          items:
+            $ref: '#/components/schemas/CreateOrderItem'
+      example:
+        items:
+          - product_id: 1
+            quantity: 2
+          - product_id: 3
+            quantity: 1
+    OrderItem:
+      type: object
+      required:
+        - product_id
+        - quantity
+        - line_total_cents
+      properties:
+        product_id:
+          type: integer
+        quantity:
+          type: integer
+        line_total_cents:
+          type: integer
+          description: quantity × product price, in the smallest currency unit.
+    Order:
+      type: object
+      required:
+        - id
+        - items
+        - status
+        - total_cents
+        - currency
+        - created_at
+      properties:
+        id:
+          type: integer
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/OrderItem'
+        status:
+          type: string
+          enum:
+            - new
+            - paid
+            - shipped
+        total_cents:
+          type: integer
+        currency:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+      example:
+        id: 1
+        items:
+          - product_id: 1
+            quantity: 2
+            line_total_cents: 520000
+          - product_id: 3
+            quantity: 1
+            line_total_cents: 15000
+        status: new
+        total_cents: 535000
+        currency: USD
+        created_at: '2026-08-20T10:05:00Z'
+    OrderPage:
+      allOf:
+        - $ref: '#/components/schemas/CursorPage'
+        - type: object
+          required:
+            - items
+          properties:
+            items:
+              type: array
+              items:
+                $ref: '#/components/schemas/Order'

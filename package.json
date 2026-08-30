@@ -1,0 +1,33 @@
+{
+  "name": "marketplace-api",
+  "version": "1.0.0",
+  "description": "Marketplace API — spec-first NestJS + express-openapi-validator + PostgreSQL",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/main.js",
+    "start:dev": "node --watch dist/main.js",
+    "lint": "redocly lint openapi/openapi.yaml",
+    "bundle": "redocly bundle openapi/openapi.yaml -o spec.json",
+    "verify:spec": "npm run bundle && node scripts/check-openapi.js",
+    "db:setup": "node dist/database/setup.js"
+  },
+  "dependencies": {
+    "@nestjs/common": "^11.2.3",
+    "@nestjs/core": "^11.2.3",
+    "@nestjs/platform-express": "^11.2.3",
+    "express-openapi-validator": "5.6.2",
+    "pg": "^8.23.0",
+    "reflect-metadata": "^0.2.2",
+    "rxjs": "^7.8.2"
+  },
+  "devDependencies": {
+    "@redocly/cli": "^2.49.0",
+    "@types/express": "^5.0.6",
+    "@types/node": "^24.13.3",
+    "@types/pg": "^8.23.1",
+    "typescript": "^5.9.3"
+  }
+}
