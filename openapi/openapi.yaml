@@ -7,9 +7,12 @@ info:
     creation, and RFC 9457 problem+json errors. The OpenAPI contract is the single
     source of truth; the runtime NestJS app validates every request and response
     against it with express-openapi-validator at the boundary.
+  license:
+    name: MIT
+    url: https://opensource.org/license/mit
 servers:
-  - url: http://localhost:3000
-    description: Local development server
+  - url: https://api.marketplace.example
+    description: Production server
 security: []
 tags:
   - name: products
@@ -314,6 +317,7 @@ components:
           type: string
     Product:
       type: object
+      additionalProperties: false
       required:
         - id
         - title
@@ -460,6 +464,7 @@ components:
             quantity: 1
     OrderItem:
       type: object
+      additionalProperties: false
       required:
         - product_id
         - quantity
@@ -474,6 +479,7 @@ components:
           description: quantity × product price, in the smallest currency unit.
     Order:
       type: object
+      additionalProperties: false
       required:
         - id
         - items
