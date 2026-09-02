@@ -1,6 +1,7 @@
 import 'reflect-metadata';
 
 import { NestFactory } from '@nestjs/core';
+import { ConfigService } from '@nestjs/config';
 
 import { AppModule } from './app.module';
 
@@ -9,11 +10,15 @@ async function bootstrap(): Promise<void> {
 
   app.enableShutdownHooks();
 
-  const port = Number(process.env.PORT ?? 3000);
+  const config = app.get(ConfigService);
+  const port = config.get<number>('PORT') ?? 3000;
 
   await app.listen(port);
 
   console.log(`Marketplace API listening on http://localhost:${port}`);
 }
 
-void bootstrap();
+bootstrap().catch((err) => {
+  console.error(err instanceof Error ? err.message : err);
+  process.exit(1);
+});

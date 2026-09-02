@@ -1,0 +1,54 @@
+services:
+  backend:
+    image: infisical/infisical:v0.162.19
+    container_name: infisical-backend
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    env_file: .env
+    environment:
+      - NODE_ENV=production
+      - TELEMETRY_ENABLED=false
+    ports:
+      - '8080:8080'
+    healthcheck:
+      test: ['CMD-SHELL', 'wget -qO- http://127.0.0.1:8080/api/status >/dev/null || exit 1']
+      interval: 3s
+      timeout: 3s
+      retries: 60
+      start_period: 20s
+    networks: [infisical]
+
+  redis:
+    image: redis:7-alpine
+    container_name: infisical-redis
+    restart: always
+    environment:
+      - ALLOW_EMPTY_PASSWORD=yes
+    volumes:
+      - redis_data:/data
+    networks: [infisical]
+
+  db:
+    image: postgres:14-alpine
+    container_name: infisical-db
+    restart: always
+    env_file: .env
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U infisical']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks: [infisical]
+
+volumes:
+  pg_data:
+  redis_data:
+
+networks:
+  infisical:

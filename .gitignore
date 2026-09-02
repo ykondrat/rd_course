@@ -2,5 +2,8 @@ node_modules/
 dist/
 spec.json
 .env
+secrets/
+infisical/.env
+infisical/.secrets/
 *.log
 .idea

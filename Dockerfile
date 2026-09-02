@@ -23,13 +23,12 @@ FROM node:24-slim AS runner
 
 WORKDIR /app
 
-ENV NODE_ENV=production
-
 COPY package*.json ./
 COPY --from=deps /app/node_modules ./node_modules
 COPY --from=builder /app/dist ./dist
 COPY openapi ./openapi
 COPY db ./db
+COPY .env.example ./
 
 USER node
 

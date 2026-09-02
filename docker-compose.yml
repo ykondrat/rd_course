@@ -8,9 +8,12 @@ services:
       PORT: 3000
       PGHOST: postgres
       PGPORT: 5432
-      PGUSER: appuser
-      PGPASSWORD: apppass
+      PGUSER: app_user
       PGDATABASE: appdb
+      PG_POOL_MAX: 10
+      OPENAPI_SPEC: openapi/openapi.yaml
+    volumes:
+      - ./secrets:/app/secrets:ro
     ports:
       - "3000:3000"
     depends_on:
@@ -21,15 +24,17 @@ services:
   postgres:
     image: postgres:17
     environment:
-      POSTGRES_USER: appuser
-      POSTGRES_PASSWORD: apppass
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: admin-bootstrap-only
       POSTGRES_DB: appdb
     volumes:
       - pgdata:/var/lib/postgresql/data
+      - ./db/00-roles.sql:/docker-entrypoint-initdb.d/00-roles.sql:ro
       - ./db/01-schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
       - ./db/02-seed.sql:/docker-entrypoint-initdb.d/02-seed.sql:ro
+      - ./db/03-grants.sql:/docker-entrypoint-initdb.d/03-grants.sql:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U appuser -d appdb"]
+      test: ['CMD-SHELL', 'pg_isready -U admin -d appdb']
       interval: 5s
       timeout: 3s
       retries: 10
