@@ -9,6 +9,8 @@ export const EnvSchema = z.object({
   PGPASSWORD: z.string().optional(),
   PGDATABASE: z.string().min(1),
   PG_POOL_MAX: z.coerce.number().int().positive().default(10),
+  PGADMIN_USER: z.string().min(1).default('admin'),
+  PGADMIN_PASSWORD: z.string().min(1).default('admin-bootstrap-only'),
   OPENAPI_SPEC: z.string().min(1).default('openapi/openapi.yaml'),
 });
 

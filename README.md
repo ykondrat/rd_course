@@ -38,17 +38,19 @@ npm start
 
 Every variable is declared once in `src/config/env.schema.ts` (zod) and validated at startup: a missing or invalid variable aborts the process with a non-zero exit code and a message naming the offending variable — the app never starts half-configured. Code reads only the typed `ConfigService<Env, true>`; there are no raw `process.env` reads outside the schema. `npm run check:env` fails if `.env.example` drifts from the schema.
 
-| Variable       | Required | Default                | Purpose                                                                               |
-|----------------|----------|------------------------|---------------------------------------------------------------------------------------|
-| `NODE_ENV`     | no       | `development`          | `development` \| `test` \| `production`                                               |
-| `PORT`         | no       | `3000`                 | HTTP port                                                                             |
-| `PGHOST`       | yes      | —                      | Postgres host                                                                         |
-| `PGPORT`       | no       | `5432`                 | Postgres port                                                                         |
-| `PGUSER`       | yes      | —                      | Postgres role the app connects with (`app_user`)                                      |
-| `PGPASSWORD`   | no       | —                      | `app_user`'s password — read from `secrets/db_password` at runtime; env is a fallback |
-| `PGDATABASE`   | yes      | —                      | Database name                                                                         |
-| `PG_POOL_MAX`  | no       | `10`                   | Max pool connections                                                                  |
-| `OPENAPI_SPEC` | no       | `openapi/openapi.yaml` | Contract the runtime validator loads                                                  |
+| Variable           | Required  | Default                | Purpose                                                                               |
+|--------------------|-----------|------------------------|---------------------------------------------------------------------------------------|
+| `NODE_ENV`         | no        | `development`          | `development` \| `test` \| `production`                                               |
+| `PORT`             | no        | `3000`                 | HTTP port                                                                             |
+| `PGHOST`           | yes       | —                      | Postgres host                                                                         |
+| `PGPORT`           | no        | `5432`                 | Postgres port                                                                         |
+| `PGUSER`           | yes       | —                      | Postgres role the app connects with (`app_user`)                                      |
+| `PGPASSWORD`       | no        | —                      | `app_user`'s password — read from `secrets/db_password` at runtime; env is a fallback |
+| `PGDATABASE`       | yes       | —                      | Database name                                                                         |
+| `PG_POOL_MAX`      | no        | `10`                   | Max pool connections                                                                  |
+| `PGADMIN_USER`     | no        | `admin`                | Bootstrap admin for `db:setup`/migrations only — the app never uses it                |
+| `PGADMIN_PASSWORD` | no        | `admin-bootstrap-only` | Bootstrap admin password (matches `docker-compose.yml`)                               |
+| `OPENAPI_SPEC`     | no        | `openapi/openapi.yaml` | Contract the runtime validator loads                                                  |
 
 ### Two roles, the least privilege
 

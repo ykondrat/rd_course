@@ -12,8 +12,8 @@ async function main(): Promise<void> {
     host: env.PGHOST,
     port: env.PGPORT,
     database: env.PGDATABASE,
-    user: process.env.PGADMIN_USER ?? 'admin',
-    password: process.env.PGADMIN_PASSWORD ?? 'admin-bootstrap-only',
+    user: env.PGADMIN_USER,
+    password: env.PGADMIN_PASSWORD,
   });
 
   const dir = join(process.cwd(), 'db');
