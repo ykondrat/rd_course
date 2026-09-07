@@ -7,6 +7,13 @@ Spec-first Marketplace API (products + orders) with cursor pagination, idempoten
 
 ## Run
 
+Copy the env contract and create the local DB-password file:
+
+```bash
+cp .env.example .env
+mkdir -p secrets && printf 'apppass' > secrets/db_password
+```
+
 ### A) Docker (recommended — one command)
 
 ```bash
@@ -14,18 +21,75 @@ docker compose up --build
 # API on http://localhost:3000
 ```
 
+Postgres initializes itself from `db/*.sql` via `docker-entrypoint-initdb.d`.
+
 ### B) Local (Node + a reachable Postgres)
 
 ```bash
 npm install
-docker compose up -d postgres      # or any Postgres 17 on localhost:5432 (override exposes it)
+docker compose up -d postgres
 npm run build
-npm run db:setup                   # applies db/01-schema.sql + db/02-seed.sql
-npm start                          # http://localhost:3000
+npm start
 ```
 
-Configuration (env vars; defaults in `.env.example`): `PGHOST` `PGPORT` `PGUSER` `PGPASSWORD`
-`PGDATABASE` `PG_POOL_MAX` `PORT` `OPENAPI_SPEC`.
+`npm run db:setup` applies `db/*.sql` against an external Postgres.
+
+## Configuration
+
+Every variable is declared once in `src/config/env.schema.ts` (zod) and validated at startup: a missing or invalid variable aborts the process with a non-zero exit code and a message naming the offending variable — the app never starts half-configured. Code reads only the typed `ConfigService<Env, true>`; there are no raw `process.env` reads outside the schema. `npm run check:env` fails if `.env.example` drifts from the schema.
+
+| Variable           | Required  | Default                | Purpose                                                                               |
+|--------------------|-----------|------------------------|---------------------------------------------------------------------------------------|
+| `NODE_ENV`         | no        | `development`          | `development` \| `test` \| `production`                                               |
+| `PORT`             | no        | `3000`                 | HTTP port                                                                             |
+| `PGHOST`           | yes       | —                      | Postgres host                                                                         |
+| `PGPORT`           | no        | `5432`                 | Postgres port                                                                         |
+| `PGUSER`           | yes       | —                      | Postgres role the app connects with (`app_user`)                                      |
+| `PGPASSWORD`       | no        | —                      | `app_user`'s password — read from `secrets/db_password` at runtime; env is a fallback |
+| `PGDATABASE`       | yes       | —                      | Database name                                                                         |
+| `PG_POOL_MAX`      | no        | `10`                   | Max pool connections                                                                  |
+| `PGADMIN_USER`     | no        | `admin`                | Bootstrap admin for `db:setup`/migrations only — the app never uses it                |
+| `PGADMIN_PASSWORD` | no        | `admin-bootstrap-only` | Bootstrap admin password (matches `docker-compose.yml`)                               |
+| `OPENAPI_SPEC`     | no        | `openapi/openapi.yaml` | Contract the runtime validator loads                                                  |
+
+### Two roles, the least privilege
+
+The container's `POSTGRES_USER` is a bootstrap admin superuser used only to create roles and run rotation — the app never connects with it. The app connects as `app_user`: `SELECT/INSERT/UPDATE` on the marketplace tables, no `ALTER ROLE`, no DDL.
+
+The app reads `app_user`'s password from `secrets/db_password`. The pg pool sets `password` to a function that re-reads that file on every new connection — that is what lets the password rotate without a restart.
+
+### Rotate the DB password with zero downtime
+
+With Postgres up (compose) and the API running:
+
+```bash
+curl -s localhost:3000/health          # note "uptime"
+bash rotate.sh                         # admin: ALTER ROLE app_user → rewrite the file → drop old backends
+curl -s localhost:3000/products        # 200 — served over a NEW connection with the new password
+curl -s localhost:3000/health          # "uptime" is larger → the process never restarted
+```
+
+`rotate.sh` runs as the `admin` superuser (over the container's local socket), changes `app_user`'s password, updates `secrets/db_password`, and terminates `app_user`'s existing backends so the pool reconnects with the new password.
+
+### Secrets in Infisical (source of truth)
+
+Secrets live in a self-hosted Infisical; the store — not `.env` — is the source of truth.
+Bringing it up and provisioning it is a single command (no clicking in the UI):
+
+```bash
+cp infisical/.env.example infisical/.env   # set ENCRYPTION_KEY + AUTH_SECRET (openssl rand ...)
+npm run infisical:up                       # docker compose up + REST bootstrap:
+```
+
+`bootstrap.mjs` fills the store over its REST API and writes the machine identity' `clientId`/`clientSecret` to git-ignored `infisical/.secrets/` — the only thing the app knows about the store; the secret values themselves never touch the disk. Then run the app with the secrets injected — no `.env`, nothing materialized to disk:
+
+```bash
+docker compose up -d postgres              # the database the dev secrets point at
+npm run infisical:run                      # machine-identity login + `infisical run --env dev`
+npm run infisical:run:prod                 # same binary, prod values (different host/pool/NODE_ENV)
+bash infisical/run.sh dev env | grep PG    # see exactly what got injected
+npm run infisical:down                     # tear down + wipe .secrets/
+```
 
 ## API
 

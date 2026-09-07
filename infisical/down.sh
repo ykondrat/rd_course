@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+cd "$(dirname "${BASH_SOURCE[0]}")"
+
+docker compose down -v
+
+rm -rf .secrets
+
+echo "✓ containers, volume and .secrets/ removed"

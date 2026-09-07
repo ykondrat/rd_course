@@ -4,7 +4,8 @@ dist
 .gitignore
 spec.json
 .env
-.env.example
+secrets
 .idea
 README.md
 scripts
+infisical

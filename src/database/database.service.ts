@@ -1,19 +1,46 @@
-import { Injectable, OnModuleDestroy } from '@nestjs/common';
+import { Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import { readFile } from 'node:fs/promises';
+import { resolve } from 'node:path';
 import { Pool, PoolClient, QueryResult, types } from 'pg';
+
+import type { Env } from '../config/env.schema';
 
 types.setTypeParser(20, (v: string | null) => (v === null ? null : Number(v)));
 types.setTypeParser(1184, (v: string | null) => (v === null ? null : new Date(v).toISOString()));
 
+const PASSWORD_FILE = resolve(process.cwd(), 'secrets', 'db_password');
+
 @Injectable()
 export class DatabaseService implements OnModuleDestroy {
-  private readonly pool = new Pool({
-    host: process.env.PGHOST ?? 'localhost',
-    port: Number(process.env.PGPORT ?? 5432),
-    user: process.env.PGUSER ?? 'appuser',
-    password: process.env.PGPASSWORD ?? 'apppass',
-    database: process.env.PGDATABASE ?? 'appdb',
-    max: Number(process.env.PG_POOL_MAX ?? 10),
-  });
+  private readonly logger = new Logger(DatabaseService.name);
+  private readonly pool: Pool;
+
+  constructor(private readonly config: ConfigService<Env, true>) {
+    const fallbackPassword = this.config.get('PGPASSWORD', { infer: true });
+
+    this.pool = new Pool({
+      host: this.config.get('PGHOST', { infer: true }),
+      port: this.config.get('PGPORT', { infer: true }),
+      user: this.config.get('PGUSER', { infer: true }),
+      database: this.config.get('PGDATABASE', { infer: true }),
+      max: this.config.get('PG_POOL_MAX', { infer: true }),
+      password: () => this.readPassword(fallbackPassword),
+    });
+
+    this.pool.on('error', (err) => {
+      this.logger.warn(`Idle pg client error (expected during rotation): ${err.message}`);
+    });
+  }
+
+  private async readPassword(fallback?: string): Promise<string> {
+    try {
+      return (await readFile(PASSWORD_FILE, 'utf8')).trim();
+    } catch {
+      if (fallback != null && fallback !== '') return fallback;
+      throw new Error(`DB password unavailable: create ${PASSWORD_FILE} or set PGPASSWORD`);
+    }
+  }
 
   query(text: string, params: unknown[] = []): Promise<QueryResult> {
     return this.pool.query(text, params as unknown[] as never);

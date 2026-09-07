@@ -19,6 +19,8 @@ tags:
     description: Product catalog — browse, look up, create and update products.
   - name: orders
     description: Orders — cursor-paged listing and idempotent creation.
+  - name: system
+    description: Operational endpoints — liveness.
 paths:
   /products:
     get:
@@ -205,6 +207,23 @@ paths:
           $ref: '#/components/responses/NotFound'
         '500':
           $ref: '#/components/responses/InternalError'
+  /health:
+    get:
+      operationId: getHealth
+      summary: Liveness probe
+      tags:
+        - system
+      responses:
+        '200':
+          description: The service process is alive.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthStatus'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '500':
+          $ref: '#/components/responses/InternalError'
 components:
   parameters:
     LimitParam:
@@ -315,6 +334,27 @@ components:
           type: string
         errorCode:
           type: string
+    HealthStatus:
+      type: object
+      additionalProperties: false
+      required:
+        - status
+        - uptime
+        - timestamp
+      properties:
+        status:
+          type: string
+          description: Always "ok" while the process is serving.
+        uptime:
+          type: number
+          description: Process uptime in seconds.
+        timestamp:
+          type: string
+          format: date-time
+      example:
+        status: ok
+        uptime: 1234.56
+        timestamp: '2026-08-20T10:00:00Z'
     Product:
       type: object
       additionalProperties: false
