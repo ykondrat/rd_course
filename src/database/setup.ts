@@ -18,7 +18,7 @@ async function main(): Promise<void> {
 
   const dir = join(process.cwd(), 'db');
 
-  for (const file of ['00-roles.sql', '01-schema.sql', '02-seed.sql', '03-grants.sql']) {
+  for (const file of ['roles.sql', 'schema.sql', 'seed.sql', 'grants.sql', 'indexes.sql']) {
     const sql = readFileSync(join(dir, file), 'utf8');
 
     await pool.query(sql);

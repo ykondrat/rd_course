@@ -8,6 +8,7 @@ export const EnvSchema = z.object({
   PGUSER: z.string().min(1),
   PGPASSWORD: z.string().optional(),
   PGDATABASE: z.string().min(1),
+  DATABASE_URL: z.url().optional(),
   PG_POOL_MAX: z.coerce.number().int().positive().default(10),
   PGADMIN_USER: z.string().min(1).default('admin'),
   PGADMIN_PASSWORD: z.string().min(1).default('admin-bootstrap-only'),

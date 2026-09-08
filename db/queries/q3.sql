@@ -1,0 +1,1 @@
+SELECT * FROM products WHERE lower(sku) = lower('SKU-012345');
