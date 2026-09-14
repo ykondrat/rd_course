@@ -11,7 +11,7 @@ CREATE TABLE products (
   id          bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   title       text        NOT NULL,
   price_cents bigint      NOT NULL CHECK (price_cents >= 0),
-  currency    text        NOT NULL,
+  currency    text        NOT NULL CHECK (currency ~ '^[A-Z]{3}$'),
   sku         text        NOT NULL,
   description text,
   created_at  timestamptz NOT NULL DEFAULT now()
@@ -19,8 +19,8 @@ CREATE TABLE products (
 
 CREATE TABLE orders (
   id          bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-  user_id     bigint      REFERENCES users(id),
-  currency    text        NOT NULL,
+  user_id     bigint      NOT NULL REFERENCES users(id),
+  currency    text        NOT NULL CHECK (currency ~ '^[A-Z]{3}$'),
   total_cents bigint      NOT NULL CHECK (total_cents >= 0),
   status      text        NOT NULL DEFAULT 'new' CHECK (status IN ('new', 'paid', 'shipped')),
   created_at  timestamptz NOT NULL DEFAULT now()

@@ -14,6 +14,7 @@ export interface OrderItem {
 
 export interface Order {
   id: number;
+  user_id: number;
   items: OrderItem[];
   status: string;
   total_cents: number;
@@ -22,6 +23,7 @@ export interface Order {
 }
 
 export interface CreateOrderBody {
+  user_id: number;
   items: Array<{ product_id: number; quantity: number }>;
 }
 
@@ -32,6 +34,7 @@ export interface CreateResult {
 
 interface OrderRow {
   id: number;
+  user_id: number;
   status: string;
   total_cents: number;
   currency: string;
@@ -55,7 +58,7 @@ export class OrdersService {
 
     params.push(limit + 1);
 
-    const sql = `SELECT id, status, total_cents, currency, created_at FROM orders ${where} ORDER BY created_at DESC, id DESC LIMIT $${params.length}`;
+    const sql = `SELECT id, user_id, status, total_cents, currency, created_at FROM orders ${where} ORDER BY created_at DESC, id DESC LIMIT $${params.length}`;
     const { rows } = await this.db.query(sql, params);
     const page = buildPage(rows as OrderRow[], limit);
     const itemsByOrder = await this.loadItems(page.items.map((o) => o.id));
@@ -68,7 +71,7 @@ export class OrdersService {
 
   async getById(id: number): Promise<Order> {
     const { rows } = await this.db.query(
-      `SELECT id, status, total_cents, currency, created_at FROM orders WHERE id = $1`,
+      `SELECT id, user_id, status, total_cents, currency, created_at FROM orders WHERE id = $1`,
       [id],
     );
 
@@ -110,6 +113,21 @@ export class OrdersService {
         }
 
         return { order: rec.response as Order, replay: true };
+      }
+
+      const userExists = await client.query(`SELECT 1 FROM users WHERE id = $1`, [body.user_id]);
+
+      if (userExists.rowCount === 0) {
+        throw new AppError(422, `Unknown user id: ${body.user_id}.`, {
+          code: 'user-not-found',
+          errors: [
+            {
+              path: '/user_id',
+              message: `User ${body.user_id} does not exist`,
+              errorCode: 'user-not-found',
+            },
+          ],
+        });
       }
 
       const ids = [...new Set(body.items.map((i) => i.product_id))];
@@ -159,9 +177,9 @@ export class OrdersService {
       });
 
       const inserted = await client.query(
-        `INSERT INTO orders (currency, total_cents, status) VALUES ($1, $2, 'new')
-         RETURNING id, status, total_cents, currency, created_at`,
-        [currency, total],
+        `INSERT INTO orders (user_id, currency, total_cents, status) VALUES ($1, $2, $3, 'new')
+         RETURNING id, user_id, status, total_cents, currency, created_at`,
+        [body.user_id, currency, total],
       );
       const orderRow = inserted.rows[0] as OrderRow;
 
@@ -210,6 +228,7 @@ export class OrdersService {
   private assemble(row: OrderRow, items: OrderItem[]): Order {
     return {
       id: row.id,
+      user_id: row.user_id,
       items,
       status: row.status,
       total_cents: row.total_cents,

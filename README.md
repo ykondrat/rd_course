@@ -127,15 +127,15 @@ npm run infisical:down                     # tear down + wipe .secrets/
 
 ## API
 
-| Method & path          | operationId     | Notes                                                             |
-|------------------------|-----------------|-------------------------------------------------------------------|
-| `GET /products`        | listProducts    | cursor pagination (`limit`, `cursor`) -> `{ items, next_cursor }` |
-| `POST /products`       | createProduct   | create; `201` + `Location`                                        |
-| `GET /products/{id}`   | getProduct      | `200` / `404`                                                     |
-| `PATCH /products/{id}` | updateProduct   | partial update (`minProperties: 1`) -> `200` / `404`              |
-| `GET /orders`          | listOrders      | cursor pagination                                                 |
-| `POST /orders`         | createOrder     | `Idempotency-Key` required; `201` / `400` / `409` / `422`         |
-| `GET /orders/{id}`     | getOrder        | `200` / `404`                                                     |
+| Method & path          | operationId     | Notes                                                                               |
+|------------------------|-----------------|-------------------------------------------------------------------------------------|
+| `GET /products`        | listProducts    | cursor pagination (`limit`, `cursor`) -> `{ items, next_cursor }`                   |
+| `POST /products`       | createProduct   | create; `201` + `Location`                                                          |
+| `GET /products/{id}`   | getProduct      | `200` / `404`                                                                       |
+| `PATCH /products/{id}` | updateProduct   | partial update (`minProperties: 1`) -> `200` / `404`                                |
+| `GET /orders`          | listOrders      | cursor pagination                                                                   |
+| `POST /orders`         | createOrder     | `user_id` + `items` body, `Idempotency-Key` required; `201` / `400` / `409` / `422` |
+| `GET /orders/{id}`     | getOrder        | `200` / `404`                                                                       |
 
 - **Cursor** is an opaque `base64url` token; `next_cursor: null` means no more pages.
 - **Idempotency-Key** (on `POST /orders`): same key + same body -> the original `201` replayed with `Idempotency-Replay: true`; same key + different body -> `422`; key still in flight -> `409`. The key claim, the order, and its items are all committed in one transaction.
@@ -161,15 +161,15 @@ With the app running (`docker compose up` or the local path):
 
 ```bash
 curl -s -o /dev/null -w '%{http_code}\n' -X POST localhost:3000/orders \
-  -H 'content-type: application/json' -d '{"items":[{"product_id":5,"quantity":2}]}'
+  -H 'content-type: application/json' -d '{"user_id":1,"items":[{"product_id":5,"quantity":2}]}'
 curl -s localhost:3000/orders -X POST -H 'content-type: application/json' \
-  -H 'Idempotency-Key: k-empty' -d '{"items":[]}' 
+  -H 'Idempotency-Key: k-empty' -d '{"user_id":1,"items":[]}' 
 curl -s -X POST localhost:3000/orders -H 'content-type: application/json' \
-  -H 'Idempotency-Key: k-1' -d '{"items":[{"product_id":5,"quantity":2}]}'
+  -H 'Idempotency-Key: k-1' -d '{"user_id":1,"items":[{"product_id":5,"quantity":2}]}'
 curl -s -i -X POST localhost:3000/orders -H 'content-type: application/json' \
-  -H 'Idempotency-Key: k-1' -d '{"items":[{"product_id":5,"quantity":2}]}' | grep -i idempotency-replay
+  -H 'Idempotency-Key: k-1' -d '{"user_id":1,"items":[{"product_id":5,"quantity":2}]}' | grep -i idempotency-replay
 curl -s -o /dev/null -w '%{http_code}\n' -X POST localhost:3000/orders \
-  -H 'content-type: application/json' -H 'Idempotency-Key: k-1' -d '{"items":[{"product_id":5,"quantity":3}]}'
+  -H 'content-type: application/json' -H 'Idempotency-Key: k-1' -d '{"user_id":1,"items":[{"product_id":5,"quantity":3}]}'
 curl -s -X POST localhost:3000/products -H 'content-type: application/json' \
   -d '{"title":"Standing Desk","price_cents":890000,"currency":"USD","sku":"SD-009"}'
 curl -s -X PATCH localhost:3000/products/1 -H 'content-type: application/json' -d '{"price_cents":199000}'

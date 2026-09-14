@@ -375,6 +375,7 @@ components:
           description: Price in the smallest currency unit (e.g. cents).
         currency:
           type: string
+          pattern: '^[A-Z]{3}$'
           description: ISO-4217 currency code.
         sku:
           type: string
@@ -411,6 +412,7 @@ components:
           type: string
           minLength: 3
           maxLength: 3
+          pattern: '^[A-Z]{3}$'
           description: ISO-4217 currency code.
         sku:
           type: string
@@ -441,6 +443,7 @@ components:
           type: string
           minLength: 3
           maxLength: 3
+          pattern: '^[A-Z]{3}$'
         sku:
           type: string
           minLength: 1
@@ -488,8 +491,13 @@ components:
       type: object
       additionalProperties: false
       required:
+        - user_id
         - items
       properties:
+        user_id:
+          type: integer
+          minimum: 1
+          description: Id of the user the order belongs to.
         items:
           type: array
           minItems: 1
@@ -497,6 +505,7 @@ components:
           items:
             $ref: '#/components/schemas/CreateOrderItem'
       example:
+        user_id: 1
         items:
           - product_id: 1
             quantity: 2
@@ -522,6 +531,7 @@ components:
       additionalProperties: false
       required:
         - id
+        - user_id
         - items
         - status
         - total_cents
@@ -529,6 +539,8 @@ components:
         - created_at
       properties:
         id:
+          type: integer
+        user_id:
           type: integer
         items:
           type: array
@@ -544,11 +556,13 @@ components:
           type: integer
         currency:
           type: string
+          pattern: '^[A-Z]{3}$'
         created_at:
           type: string
           format: date-time
       example:
         id: 1
+        user_id: 1
         items:
           - product_id: 1
             quantity: 2
