@@ -20,10 +20,7 @@ export class DatabaseService implements OnModuleDestroy {
     const fallbackPassword = this.config.get('PGPASSWORD', { infer: true });
 
     this.pool = new Pool({
-      host: this.config.get('PGHOST', { infer: true }),
-      port: this.config.get('PGPORT', { infer: true }),
-      user: this.config.get('PGUSER', { infer: true }),
-      database: this.config.get('PGDATABASE', { infer: true }),
+      ...this.resolveTarget(),
       max: this.config.get('PG_POOL_MAX', { infer: true }),
       password: () => this.readPassword(fallbackPassword),
     });
@@ -31,6 +28,28 @@ export class DatabaseService implements OnModuleDestroy {
     this.pool.on('error', (err) => {
       this.logger.warn(`Idle pg client error (expected during rotation): ${err.message}`);
     });
+  }
+
+  private resolveTarget(): { host: string; port: number; user: string; database: string } {
+    const url = this.config.get('DATABASE_URL', { infer: true });
+
+    if (url) {
+      const u = new URL(url);
+
+      return {
+        host: u.hostname,
+        port: u.port ? Number(u.port) : 5432,
+        user: decodeURIComponent(u.username),
+        database: u.pathname.replace(/^\//, ''),
+      };
+    }
+
+    return {
+      host: this.config.get('PGHOST', { infer: true }),
+      port: this.config.get('PGPORT', { infer: true }),
+      user: this.config.get('PGUSER', { infer: true }),
+      database: this.config.get('PGDATABASE', { infer: true }),
+    };
   }
 
   private async readPassword(fallback?: string): Promise<string> {

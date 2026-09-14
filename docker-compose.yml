@@ -29,10 +29,9 @@ services:
       POSTGRES_DB: appdb
     volumes:
       - pgdata:/var/lib/postgresql/data
-      - ./db/00-roles.sql:/docker-entrypoint-initdb.d/00-roles.sql:ro
-      - ./db/01-schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
-      - ./db/02-seed.sql:/docker-entrypoint-initdb.d/02-seed.sql:ro
-      - ./db/03-grants.sql:/docker-entrypoint-initdb.d/03-grants.sql:ro
+      - ./db/roles.sql:/docker-entrypoint-initdb.d/01-roles.sql:ro
+      - ./db/schema.sql:/docker-entrypoint-initdb.d/02-schema.sql:ro
+      - ./db/grants.sql:/docker-entrypoint-initdb.d/03-grants.sql:ro
     healthcheck:
       test: ['CMD-SHELL', 'pg_isready -U admin -d appdb']
       interval: 5s

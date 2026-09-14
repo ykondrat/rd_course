@@ -34,23 +34,57 @@ npm start
 
 `npm run db:setup` applies `db/*.sql` against an external Postgres.
 
+## Database & query optimization
+
+Main table: **`orders`** (150,000 rows). Files in `db/`: `schema.sql` (tables + 3 FKs,
+money as `BIGINT` minor units — exact, never float), `seed.sql` (data, ends with
+`VACUUM (ANALYZE)`), `queries/q1–q3.sql`, `indexes.sql` (composite + partial + expression),
+`OPTIMIZATIONS.md` (before/after `EXPLAIN` report).
+
+Bring up the database:
+
+```bash
+docker compose up -d --wait postgres
+```
+
+Connect and check it's live:
+
+```bash
+docker compose exec -T postgres psql -U admin -d appdb -Atc "SELECT 1"   # → 1
+```
+
+Reproduce the optimization from a clean volume (the grader's cycle). `up` applies only
+roles + schema — no data, no optimization indexes — so a fresh DB shows Seq Scans "before":
+
+```bash
+docker compose down -v && docker compose up -d --wait postgres
+P="docker compose exec -T postgres psql -U admin -d appdb -v ON_ERROR_STOP=1"
+$P < db/schema.sql                                  # tables + constraints
+$P < db/seed.sql                                    # 150k orders, then VACUUM (ANALYZE)
+for q in 1 2 3; do $P -c "EXPLAIN (ANALYZE, BUFFERS) $(cat db/queries/q$q.sql)"; done  # BEFORE: Seq Scan
+$P < db/indexes.sql
+$P -c "ANALYZE;"
+for q in 1 2 3; do $P -c "EXPLAIN (ANALYZE, BUFFERS) $(cat db/queries/q$q.sql)"; done  # AFTER: Index Scan
+```
+
 ## Configuration
 
 Every variable is declared once in `src/config/env.schema.ts` (zod) and validated at startup: a missing or invalid variable aborts the process with a non-zero exit code and a message naming the offending variable — the app never starts half-configured. Code reads only the typed `ConfigService<Env, true>`; there are no raw `process.env` reads outside the schema. `npm run check:env` fails if `.env.example` drifts from the schema.
 
-| Variable           | Required  | Default                | Purpose                                                                               |
-|--------------------|-----------|------------------------|---------------------------------------------------------------------------------------|
-| `NODE_ENV`         | no        | `development`          | `development` \| `test` \| `production`                                               |
-| `PORT`             | no        | `3000`                 | HTTP port                                                                             |
-| `PGHOST`           | yes       | —                      | Postgres host                                                                         |
-| `PGPORT`           | no        | `5432`                 | Postgres port                                                                         |
-| `PGUSER`           | yes       | —                      | Postgres role the app connects with (`app_user`)                                      |
-| `PGPASSWORD`       | no        | —                      | `app_user`'s password — read from `secrets/db_password` at runtime; env is a fallback |
-| `PGDATABASE`       | yes       | —                      | Database name                                                                         |
-| `PG_POOL_MAX`      | no        | `10`                   | Max pool connections                                                                  |
-| `PGADMIN_USER`     | no        | `admin`                | Bootstrap admin for `db:setup`/migrations only — the app never uses it                |
-| `PGADMIN_PASSWORD` | no        | `admin-bootstrap-only` | Bootstrap admin password (matches `docker-compose.yml`)                               |
-| `OPENAPI_SPEC`     | no        | `openapi/openapi.yaml` | Contract the runtime validator loads                                                  |
+| Variable            | Required   | Default                 | Purpose                                                                                                             |
+|---------------------|------------|-------------------------|---------------------------------------------------------------------------------------------------------------------|
+| `NODE_ENV`          | no         | `development`           | `development` \| `test` \| `production`                                                                             |
+| `PORT`              | no         | `3000`                  | HTTP port                                                                                                           |
+| `PGHOST`            | yes        | —                       | Postgres host                                                                                                       |
+| `PGPORT`            | no         | `5432`                  | Postgres port                                                                                                       |
+| `PGUSER`            | yes        | —                       | Postgres role the app connects with (`app_user`)                                                                    |
+| `PGPASSWORD`        | no         | —                       | `app_user`'s password — read from `secrets/db_password` at runtime; env is a fallback                               |
+| `PGDATABASE`        | yes        | —                       | Database name                                                                                                       |
+| `DATABASE_URL`      | no         | —                       | App connection string (host/port/user/db). `.env.example` has a fake value, password stays in `secrets/db_password` |
+| `PG_POOL_MAX`       | no         | `10`                    | Max pool connections                                                                                                |
+| `PGADMIN_USER`      | no         | `admin`                 | Bootstrap admin for `db:setup`/migrations only — the app never uses it                                              |
+| `PGADMIN_PASSWORD`  | no         | `admin-bootstrap-only`  | Bootstrap admin password (matches `docker-compose.yml`)                                                             |
+| `OPENAPI_SPEC`      | no         | `openapi/openapi.yaml`  | Contract the runtime validator loads                                                                                |
 
 ### Two roles, the least privilege
 
@@ -93,15 +127,15 @@ npm run infisical:down                     # tear down + wipe .secrets/
 
 ## API
 
-| Method & path          | operationId     | Notes                                                             |
-|------------------------|-----------------|-------------------------------------------------------------------|
-| `GET /products`        | listProducts    | cursor pagination (`limit`, `cursor`) -> `{ items, next_cursor }` |
-| `POST /products`       | createProduct   | create; `201` + `Location`                                        |
-| `GET /products/{id}`   | getProduct      | `200` / `404`                                                     |
-| `PATCH /products/{id}` | updateProduct   | partial update (`minProperties: 1`) -> `200` / `404`              |
-| `GET /orders`          | listOrders      | cursor pagination                                                 |
-| `POST /orders`         | createOrder     | `Idempotency-Key` required; `201` / `400` / `409` / `422`         |
-| `GET /orders/{id}`     | getOrder        | `200` / `404`                                                     |
+| Method & path          | operationId     | Notes                                                                               |
+|------------------------|-----------------|-------------------------------------------------------------------------------------|
+| `GET /products`        | listProducts    | cursor pagination (`limit`, `cursor`) -> `{ items, next_cursor }`                   |
+| `POST /products`       | createProduct   | create; `201` + `Location`                                                          |
+| `GET /products/{id}`   | getProduct      | `200` / `404`                                                                       |
+| `PATCH /products/{id}` | updateProduct   | partial update (`minProperties: 1`) -> `200` / `404`                                |
+| `GET /orders`          | listOrders      | cursor pagination                                                                   |
+| `POST /orders`         | createOrder     | `user_id` + `items` body, `Idempotency-Key` required; `201` / `400` / `409` / `422` |
+| `GET /orders/{id}`     | getOrder        | `200` / `404`                                                                       |
 
 - **Cursor** is an opaque `base64url` token; `next_cursor: null` means no more pages.
 - **Idempotency-Key** (on `POST /orders`): same key + same body -> the original `201` replayed with `Idempotency-Replay: true`; same key + different body -> `422`; key still in flight -> `409`. The key claim, the order, and its items are all committed in one transaction.
@@ -127,15 +161,15 @@ With the app running (`docker compose up` or the local path):
 
 ```bash
 curl -s -o /dev/null -w '%{http_code}\n' -X POST localhost:3000/orders \
-  -H 'content-type: application/json' -d '{"items":[{"product_id":5,"quantity":2}]}'
+  -H 'content-type: application/json' -d '{"user_id":1,"items":[{"product_id":5,"quantity":2}]}'
 curl -s localhost:3000/orders -X POST -H 'content-type: application/json' \
-  -H 'Idempotency-Key: k-empty' -d '{"items":[]}' 
+  -H 'Idempotency-Key: k-empty' -d '{"user_id":1,"items":[]}' 
 curl -s -X POST localhost:3000/orders -H 'content-type: application/json' \
-  -H 'Idempotency-Key: k-1' -d '{"items":[{"product_id":5,"quantity":2}]}'
+  -H 'Idempotency-Key: k-1' -d '{"user_id":1,"items":[{"product_id":5,"quantity":2}]}'
 curl -s -i -X POST localhost:3000/orders -H 'content-type: application/json' \
-  -H 'Idempotency-Key: k-1' -d '{"items":[{"product_id":5,"quantity":2}]}' | grep -i idempotency-replay
+  -H 'Idempotency-Key: k-1' -d '{"user_id":1,"items":[{"product_id":5,"quantity":2}]}' | grep -i idempotency-replay
 curl -s -o /dev/null -w '%{http_code}\n' -X POST localhost:3000/orders \
-  -H 'content-type: application/json' -H 'Idempotency-Key: k-1' -d '{"items":[{"product_id":5,"quantity":3}]}'
+  -H 'content-type: application/json' -H 'Idempotency-Key: k-1' -d '{"user_id":1,"items":[{"product_id":5,"quantity":3}]}'
 curl -s -X POST localhost:3000/products -H 'content-type: application/json' \
   -d '{"title":"Standing Desk","price_cents":890000,"currency":"USD","sku":"SD-009"}'
 curl -s -X PATCH localhost:3000/products/1 -H 'content-type: application/json' -d '{"price_cents":199000}'

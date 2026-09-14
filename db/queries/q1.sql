@@ -1,0 +1,1 @@
+SELECT * FROM orders WHERE user_id = 42 AND created_at >= now() - interval '90 days';
