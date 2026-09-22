@@ -19,6 +19,7 @@ import { User } from './user.entity';
 @Check('orders_total_cents_check', '"total_cents" >= 0')
 @Check('orders_status_check', "status IN ('new', 'paid', 'shipped')")
 @Index('orders_user_created_idx', ['user', 'createdAt'])
+@Index('orders_shipped_recent_idx', ['createdAt'], { where: "status = 'shipped'" })
 export class Order {
   @PrimaryGeneratedColumn('identity', {
     type: 'bigint',

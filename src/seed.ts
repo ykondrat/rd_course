@@ -1,6 +1,6 @@
 import 'reflect-metadata';
 
-import { EntityManager } from 'typeorm';
+import { EntityManager, In } from 'typeorm';
 
 import { AppDataSource } from './data-source';
 import {
@@ -29,22 +29,23 @@ const ORDER_COUNT = 12;
 const IDEMPOTENCY_COUNT = 5;
 
 async function seed(em: EntityManager): Promise<void> {
-  await em.query(
-    'TRUNCATE order_items, orders, products, users, idempotency_keys RESTART IDENTITY CASCADE',
-  );
+  const userRepo = em.getRepository(User);
+  const productRepo = em.getRepository(Product);
+  const orderRepo = em.getRepository(Order);
+  const keyRepo = em.getRepository(IdempotencyKey);
 
-  const users = await em.getRepository(User).save(
-    Array.from({ length: USER_COUNT }, (_, i) =>
-      em.getRepository(User).create({
-        email: `user${i + 1}@example.com`,
-        fullName: `User ${i + 1}`,
-      }),
-    ),
+  const emails = Array.from({ length: USER_COUNT }, (_, i) => `user${i + 1}@example.com`);
+  await userRepo.upsert(
+    emails.map((email, i) => ({ email, fullName: `User ${i + 1}` })),
+    ['email'],
   );
+  const users = await userRepo.find({ where: { email: In(emails) }, order: { email: 'ASC' } });
 
-  const products = await em.getRepository(Product).save(
-    PRODUCTS.map((p) => em.getRepository(Product).create(p)),
-  );
+  const skus = PRODUCTS.map((p) => p.sku);
+  await productRepo.upsert(PRODUCTS, ['sku']);
+  const products = await productRepo.find({ where: { sku: In(skus) }, order: { sku: 'ASC' } });
+
+  await em.query('DELETE FROM orders WHERE user_id = ANY($1::bigint[])', [users.map((u) => u.id)]);
 
   const orders: Order[] = [];
 
@@ -54,13 +55,13 @@ async function seed(em: EntityManager): Promise<void> {
     const b = products[(i + 3) % products.length];
 
     const qtyA = (i % 3) + 1;
-    const itemA = em.getRepository(OrderItem).create({
+    const itemA = orderRepo.manager.getRepository(OrderItem).create({
       product: a,
       quantity: qtyA,
       unitPriceCents: a.priceCents,
       lineTotalCents: a.priceCents * qtyA,
     });
-    const itemB = em.getRepository(OrderItem).create({
+    const itemB = orderRepo.manager.getRepository(OrderItem).create({
       product: b,
       quantity: 1,
       unitPriceCents: b.priceCents,
@@ -68,7 +69,7 @@ async function seed(em: EntityManager): Promise<void> {
     });
 
     orders.push(
-      em.getRepository(Order).create({
+      orderRepo.create({
         user,
         currency: 'USD',
         totalCents: itemA.lineTotalCents + itemB.lineTotalCents,
@@ -78,17 +79,16 @@ async function seed(em: EntityManager): Promise<void> {
     );
   }
 
-  await em.getRepository(Order).save(orders);
+  await orderRepo.save(orders);
 
-  await em.getRepository(IdempotencyKey).save(
-    Array.from({ length: IDEMPOTENCY_COUNT }, (_, i) =>
-      em.getRepository(IdempotencyKey).create({
-        key: `seed-key-${i + 1}`,
-        fingerprint: `fp-${i + 1}`,
-        state: 'completed',
-        response: { ok: true, order: i + 1 },
-      }),
-    ),
+  await keyRepo.upsert(
+    Array.from({ length: IDEMPOTENCY_COUNT }, (_, i) => ({
+      key: `seed-key-${i + 1}`,
+      fingerprint: `fp-${i + 1}`,
+      state: 'completed',
+      response: { ok: true, order: i + 1 },
+    })),
+    ['key'],
   );
 }
 

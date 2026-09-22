@@ -29,7 +29,7 @@ export class Product {
   @Column({ type: 'text' })
   currency: string;
 
-  @Column({ type: 'text' })
+  @Column({ type: 'text', unique: true })
   sku: string;
 
   @Column({ type: 'text', nullable: true })

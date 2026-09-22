@@ -10,8 +10,8 @@ export const EnvSchema = z.object({
   PGDATABASE: z.string().min(1),
   DATABASE_URL: z.url().optional(),
   PG_POOL_MAX: z.coerce.number().int().positive().default(10),
-  PGADMIN_USER: z.string().min(1).default('admin'),
-  PGADMIN_PASSWORD: z.string().min(1).default('admin-bootstrap-only'),
+  PGADMIN_USER: z.string().min(1).optional(),
+  PGADMIN_PASSWORD: z.string().min(1).optional(),
   OPENAPI_SPEC: z.string().min(1).default('openapi/openapi.yaml'),
 });
 

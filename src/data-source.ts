@@ -1,4 +1,5 @@
 import 'reflect-metadata';
+import { join } from 'node:path';
 
 import { DataSource, DataSourceOptions } from 'typeorm';
 
@@ -21,7 +22,7 @@ export const dataSourceOptions: DataSourceOptions = {
   password: env.PGPASSWORD,
   database: env.PGDATABASE,
   entities: [User, Product, Order, OrderItem, IdempotencyKey],
-  migrations: ['dist/migrations/*.js'],
+  migrations: [join(__dirname, 'migrations', '*.js')],
   synchronize: false,
 };
 
