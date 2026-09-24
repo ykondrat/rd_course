@@ -9,6 +9,7 @@ import {
   Order,
   OrderItem,
   Product,
+  Task,
   User,
 } from './entities';
 
@@ -21,7 +22,7 @@ export const dataSourceOptions: DataSourceOptions = {
   username: env.PGUSER,
   password: env.PGPASSWORD,
   database: env.PGDATABASE,
-  entities: [User, Product, Order, OrderItem, IdempotencyKey],
+  entities: [User, Product, Order, OrderItem, IdempotencyKey, Task],
   migrations: [join(__dirname, 'migrations', '*.js')],
   synchronize: false,
 };

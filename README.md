@@ -65,6 +65,11 @@ npm run seed              # deterministic; run twice → identical row counts
 npm run seed
 npm run demo:nplus1       # N+1: naive 37 (≥ N) → JOIN 1 / relationLoadStrategy 5 (=1+2×2)
 npm run report            # top products by revenue (SUM + GROUP BY via QueryBuilder)
+
+# concurrency (numbers in ## Concurrency); each self-seeds its own fixtures:
+npm run demo:race         # 50 parallel checkouts, stock=10 → exactly 10 succeed, 0 oversell, exit 0
+npm run demo:workers      # ≥2 workers via FOR UPDATE SKIP LOCKED → each task once, faster than serial
+npm run demo:retry        # provokes 40001 under REPEATABLE READ, retries → final state correct
 ```
 
 Seed idempotency — row counts are identical after the second `npm run seed`:
@@ -84,7 +89,40 @@ grep -rn "onDelete" src/                                 # ≥ 2 hits, different
 grep -rniE "\.(add)?groupBy\(" src/                      # report uses GROUP BY
 grep -nE "password:[[:space:]]*['\"]" src/data-source.ts # empty — no hard-coded creds
 node -e "const s=require('./package.json').scripts;const bad=['migrate','seed'].filter(k=>/with-secrets\.sh/.test(s[k]||'')===false);console.log(bad.length===0?'OK':'missing wrapper: '+bad.join(', '));process.exit(bad.length===0?0:1)"
+
+# concurrency static checks:
+node -e "const s=require('./package.json').scripts;const bad=['demo:race','demo:workers','demo:retry'].filter(k=>/with-secrets\.sh/.test(s[k]||'')===false);console.log(bad.length===0?'OK':'missing wrapper: '+bad.join(', '));process.exit(bad.length===0?0:1)"
+grep -rniE --include='*.ts' --exclude-dir=node_modules --exclude-dir=dist "for update|returning|pessimistic_write" .
+grep -rniE --include='*.ts' --exclude-dir=node_modules --exclude-dir=dist "skip[ _]locked" .
+grep -rniE --include='*.ts' --exclude-dir=node_modules --exclude-dir=dist "40001|40P01" .
 ```
+
+## Concurrency
+
+The checkout — decrement `stock`, debit the buyer's `balance_cents`, insert the `order` + its `order_item`, and enqueue a post-processing `task` — runs in one transaction.
+If stock or funds run out, the whole transaction rolls back, so no orphan orders exist. The `tasks` queue table holds the jobs the worker pool drains. 
+Three demo scripts drive it (`src/demo-race.ts`, `demo-workers.ts`, `demo-retry.ts`); each self-seeds its fixtures and self-checks its invariant with a non-zero exit on violation.
+
+### Numbers from my runs
+
+| Demo                                                                   | Result                                                                                  |
+|------------------------------------------------------------------------|-----------------------------------------------------------------------------------------|
+| `demo:race` — 50 parallel `checkout()`, `stock=10`, qty 1              | attempts **50**, successes **exactly 10**, final stock **0**, negative-stock rows **0** |
+| `demo:workers` — 4 workers, 24 tasks × 40 ms, `FOR UPDATE SKIP LOCKED` | distribution 6/6/6/6, processed-twice **0**, **~280 ms** vs **960 ms** sequential       |
+| `demo:retry` — 10 concurrent read-modify-write under `REPEATABLE READ` | **~11–17** `40001` retries caught, final balance **1000** = expected (`10 × 100`)       |
+
+### Oversell guard: atomic `UPDATE … RETURNING` (not pessimistic `FOR UPDATE`)
+
+`checkout` uses `UPDATE products SET stock = stock - $n WHERE id = $ AND stock >= $n RETURNING`.
+The `stock >= $n` check and the row lock are the same statement — there is no window between reading the stock and writing it, so no interleaving can oversell, and a return of 0 rows is the "out of stock" signal, backed by a real `CHECK (stock >= 0)`.
+`SELECT … FOR UPDATE` is equally correct but needs a separate read-check-write and holds the row lock across app logic; the atomic form is fewer round-trips and the recommended default.
+Pessimistic locking earns its keep only when logic between the read and the writing must see the locked row (cross-row invariants, computed pricing) — not here.
+
+### Why retry catches only `40001` / `40P01`
+
+`withRetry` re-runs the whole transaction only on `40001` (serialization_failure) and `40P01` — the two SQLSTATEs Postgres raises for transient conflicts that a fresh snapshot resolves. 
+Every other code is a real error that a blind retry would repeat forever, so it is rethrown immediately. 
+Retrying only the write would re-introduce the lost update, so the entire transaction — snapshot and all — is replayed with exponential backoff + jitter.
 
 ## Database & query optimization
 

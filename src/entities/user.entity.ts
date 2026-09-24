@@ -1,4 +1,5 @@
 import {
+  Check,
   Column,
   CreateDateColumn,
   Entity,
@@ -6,9 +7,11 @@ import {
   PrimaryGeneratedColumn,
 } from 'typeorm';
 
+import { bigintToNumber } from './columns';
 import { Order } from './order.entity';
 
 @Entity('users')
+@Check('users_balance_cents_check', '"balance_cents" >= 0')
 export class User {
   @PrimaryGeneratedColumn('identity', {
     type: 'bigint',
@@ -21,6 +24,9 @@ export class User {
 
   @Column({ type: 'text', name: 'full_name' })
   fullName: string;
+
+  @Column({ type: 'bigint', name: 'balance_cents', default: 0, transformer: bigintToNumber })
+  balanceCents: number;
 
   @CreateDateColumn({ type: 'timestamptz', name: 'created_at' })
   createdAt: Date;
