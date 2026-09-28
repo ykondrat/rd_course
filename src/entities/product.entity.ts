@@ -13,6 +13,7 @@ import { OrderItem } from './order-item.entity';
 @Entity('products')
 @Check('products_price_cents_check', '"price_cents" >= 0')
 @Check('products_currency_check', "currency ~ '^[A-Z]{3}$'")
+@Check('products_stock_check', '"stock" >= 0')
 export class Product {
   @PrimaryGeneratedColumn('identity', {
     type: 'bigint',
@@ -34,6 +35,9 @@ export class Product {
 
   @Column({ type: 'text', nullable: true })
   description: string | null;
+
+  @Column({ type: 'int', default: 0 })
+  stock: number;
 
   @CreateDateColumn({ type: 'timestamptz', name: 'created_at' })
   createdAt: Date;
