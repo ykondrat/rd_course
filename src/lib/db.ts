@@ -4,15 +4,13 @@ import { loadEnv } from '../config/env.schema';
 
 const env = loadEnv();
 
-const POOL_SIZE = 60;
-
 export const pool = new Pool({
   host: env.PGHOST,
   port: env.PGPORT,
   user: env.PGUSER,
   password: env.PGPASSWORD,
   database: env.PGDATABASE,
-  max: POOL_SIZE,
+  max: env.PG_POOL_MAX,
 });
 
 export type IsolationLevel = 'READ COMMITTED' | 'REPEATABLE READ' | 'SERIALIZABLE';

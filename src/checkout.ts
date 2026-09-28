@@ -2,7 +2,7 @@ import { PoolClient } from 'pg';
 
 import { transaction } from './lib/db';
 
-export type CheckoutFailureReason = 'OUT_OF_STOCK' | 'INSUFFICIENT_FUNDS';
+export type CheckoutFailureReason = 'NOT_FOUND' | 'OUT_OF_STOCK' | 'INSUFFICIENT_FUNDS';
 
 export type CheckoutResult =
   | { ok: true; orderId: string }
@@ -29,7 +29,11 @@ async function placeOrder(client: PoolClient, request: CheckoutRequest): Promise
     [request.quantity, request.productId],
   );
 
-  if (stockUpdate.rowCount === 0) throw new CheckoutError('OUT_OF_STOCK');
+  if (stockUpdate.rowCount === 0) {
+    const existing = await client.query(`SELECT 1 FROM products WHERE id = $1`, [request.productId]);
+
+    throw new CheckoutError(existing.rowCount === 0 ? 'NOT_FOUND' : 'OUT_OF_STOCK');
+  }
 
   const priceCents = Number(stockUpdate.rows[0].price_cents);
   const amountCents = priceCents * request.quantity;

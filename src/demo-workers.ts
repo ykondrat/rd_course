@@ -5,7 +5,7 @@ const WORKER_COUNT = 4;
 const WORK_MILLISECONDS = 40;
 
 async function seedTasks(): Promise<void> {
-  await pool.query('TRUNCATE tasks RESTART IDENTITY');
+  await pool.query(`DELETE FROM tasks WHERE type = 'demo'`);
   await pool.query(
     `INSERT INTO tasks (type, payload)
      SELECT 'demo', jsonb_build_object('n', n) FROM generate_series(1, $1) AS n`,
@@ -17,7 +17,7 @@ async function claimOneTask(workerName: string): Promise<'processed' | 'empty'> 
   return transaction(async (client) => {
     const claimed = await client.query<{ id: string }>(
       `SELECT id FROM tasks
-        WHERE status = 'pending'
+        WHERE status = 'pending' AND type = 'demo'
         ORDER BY id
         LIMIT 1
         FOR UPDATE SKIP LOCKED`,
@@ -48,7 +48,7 @@ async function runWorker(
 
     if (outcome === 'empty') {
       const pending = await pool.query<{ count: string }>(
-        `SELECT count(*) AS count FROM tasks WHERE status = 'pending'`,
+        `SELECT count(*) AS count FROM tasks WHERE status = 'pending' AND type = 'demo'`,
       );
 
       if (Number(pending.rows[0].count) === 0) return;
@@ -77,10 +77,10 @@ async function main(): Promise<number> {
   const elapsedMilliseconds = Date.now() - startedAt;
 
   const doubleProcessed = await pool.query<{ count: string }>(
-    `SELECT count(*) AS count FROM tasks WHERE processed > 1`,
+    `SELECT count(*) AS count FROM tasks WHERE processed > 1 AND type = 'demo'`,
   );
   const done = await pool.query<{ count: string }>(
-    `SELECT count(*) AS count FROM tasks WHERE status = 'done'`,
+    `SELECT count(*) AS count FROM tasks WHERE status = 'done' AND type = 'demo'`,
   );
   const doubleProcessedCount = Number(doubleProcessed.rows[0].count);
   const doneCount = Number(done.rows[0].count);
