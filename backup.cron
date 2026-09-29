@@ -1,0 +1,1 @@
+30 2 * * *  cd /path/to/rd_course && SKIP_VAULT=1 DATABASE_URL=postgres://admin:admin-bootstrap-only@127.0.0.1:6432/appdb bash scripts/backup.sh >> backups/backup.log 2>&1

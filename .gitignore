@@ -3,6 +3,7 @@ dist/
 spec.json
 .env
 secrets/
+backups/
 infisical/.env
 infisical/.secrets/
 *.log
