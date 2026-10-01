@@ -1,0 +1,60 @@
+name: contract
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  contract:
+    runs-on: ubuntu-latest
+
+    env:
+      PACT_BROKER_URL: http://127.0.0.1:9292
+      PACT_BROKER_TOKEN: ${{ secrets.PACT_BROKER_TOKEN }}
+      CONSUMER_VERSION: ${{ github.sha }}
+      PROVIDER_VERSION: ${{ github.sha }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Start Pact Broker (compose)
+        run: docker compose up -d --wait pactbroker
+
+      - name: Generate the contract (consumer)
+        run: npm run test:contract
+
+      - name: Publish the contract to the broker
+        run: |
+          curl -sf -X PUT \
+            "$PACT_BROKER_URL/pacts/provider/marketplace-api/consumer/web-app/version/$CONSUMER_VERSION" \
+            -H 'Content-Type: application/json' \
+            --data-binary @pacts/web-app-marketplace-api.json
+
+      - name: Verify the provider (real app, publishVerificationResult)
+        run: npm run verify:provider
+
+      - name: Tag the provider version as prod
+        run: |
+          curl -sf -X PUT \
+            "$PACT_BROKER_URL/pacticipants/marketplace-api/versions/$PROVIDER_VERSION/tags/prod" \
+            -H 'Content-Type: application/json'
+
+      - name: can-i-deploy web-app -> prod (gate)
+        run: |
+          RESP=$(curl -sf "$PACT_BROKER_URL/can-i-deploy?pacticipant=web-app&version=$CONSUMER_VERSION&to=prod")
+          echo "$RESP"
+          if echo "$RESP" | grep -qE '"deployable":[[:space:]]*true'; then
+            echo "can-i-deploy: OK — deploy is safe"
+          else
+            echo "::error::can-i-deploy: NOT deployable — deploy blocked"
+            exit 1
+          fi

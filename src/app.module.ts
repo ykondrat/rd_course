@@ -12,7 +12,12 @@ import { validate, type Env } from './config/env.schema';
 
 @Module({
   imports: [
-    ConfigModule.forRoot({ isGlobal: true, cache: true, validate }),
+    ConfigModule.forRoot({
+      isGlobal: true,
+      cache: true,
+      validate,
+      ignoreEnvFile: process.env.NODE_ENV === 'test',
+    }),
     DatabaseModule,
     ProductsModule,
     OrdersModule,

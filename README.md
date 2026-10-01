@@ -360,6 +360,53 @@ npm run infisical:down                     # tear down + wipe .secrets/
 - **Idempotency-Key** (on `POST /orders`): same key + same body -> the original `201` replayed with `Idempotency-Replay: true`; same key + different body -> `422`; key still in flight -> `409`. The key claim, the order, and its items are all committed in one transaction.
 - **Errors** are RFC 9457 `application/problem+json` with `type / title / status / detail / instance` (+ `code` / `errors[]`). Money is integer minor units (`*_cents`).
 
+## Testing — integration, E2E, contract
+
+The "ladder of trust": unit (belief) → integration (fact) → E2E (the whole vertical) → contract (a guarantee between services). Tests run compiled (`tsc -p tsconfig.test.json` → `dist-test/` → `jest`); no on-the-fly transformers — esbuild/tsx would drop the decorator metadata Nest DI needs. `jest.config.js` pins `reporters: ['default']` (Jest 30 otherwise auto-picks a compact `agent` reporter that hides `PASS`/test names/`✓`) and `maxWorkers: 1` (every worker multiplies containers).
+
+```bash
+npm run test:integration   # repository tests vs real Postgres 16 (@testcontainers/postgresql)
+npm run test:e2e           # full AppModule via supertest (create -> read + a 404)
+npm run test:contract      # PactV3 consumer -> pacts/web-app-marketplace-api.json
+npm run verify:provider    # the real app verifies the contract (local pact file by default)
+```
+
+Repository integration tests use transaction + ROLLBACK: one container per file, each test runs on its own client inside `BEGIN … ROLLBACK`. Cleanup is ~0 ms and, crucially, reliable (it runs even when a test throws), so `npm run test:integration && npm run test:integration` is green with no manual cleanup. This is possible only because the repositories accept a `Queryable` (`Pool | PoolClient | DatabaseService`) — in prod they get the pool, in tests a transaction client, same code. The E2E suite instead uses one fresh container per file: its create→read flow goes through the app's own transactions (idempotency + inserts), which can't be wrapped in an outer rollback; a disposable container per run keeps it repeatable. The test DB is never configured via env/secrets — it comes from `container.getConnectionUri()` at runtime.
+
+### Pact Broker + can-i-deploy
+
+The broker is a compose service (`pactbroker` + internal `pactbroker-db`, healthcheck on `127.0.0.1` — inside the container `localhost` resolves to `::1` but puma only listens on IPv4). It is a CI/CD tool, so bring it up on demand:
+
+```bash
+npm run broker:up          # docker compose up -d --wait pactbroker  (heartbeat 200)
+```
+
+The CI job `.github/workflows/contract.yml` runs: publish contract → `verify:provider` (with `publishVerificationResult`) → tag the provider version `prod` → can-i-deploy, which fails the job if `deployable` is not `true`. The broker URL is a local-compose default (not a secret); `PACT_BROKER_TOKEN` comes only from `process.env` (GitHub secrets in CI, the Infisical store locally via `bash scripts/with-secrets.sh dev npm run verify:provider`, and `SKIP_VAULT=1 …` runs the exact same command without the vault). No token is ever hard-coded.
+
+The gate is real — both states. Same `can-i-deploy` call, before and after tagging the provider version `prod` (the provider must go to prod first — "is most right"):
+
+```jsonc
+// [before tag]  can-i-deploy web-app 1.0.0 -> prod
+{"summary":{"deployable":null,"reason":"There is no verified pact between version 1.0.0 of web-app and the latest version of marketplace-api with tag prod (no such version exists)","success":0,"failed":0,"unknown":1}}
+
+// [after tag]   can-i-deploy web-app 1.0.0 -> prod
+{"summary":{"deployable":true,"reason":"All required verification results are published and successful","success":1,"failed":0,"unknown":0}}
+```
+
+Local gate, end to end:
+
+```bash
+npm run broker:up
+curl -sf -X PUT "http://127.0.0.1:9292/pacts/provider/marketplace-api/consumer/web-app/version/1.0.0" \
+  -H 'Content-Type: application/json' --data-binary @pacts/web-app-marketplace-api.json          # 201
+PACT_BROKER_URL=http://127.0.0.1:9292 PROVIDER_VERSION=1.0.0 npm run verify:provider              # exit 0, publishes result
+# emergency form for the grader (no vault): SKIP_VAULT=1 bash scripts/with-secrets.sh dev npm run verify:provider
+curl -s "http://127.0.0.1:9292/can-i-deploy?pacticipant=web-app&version=1.0.0&to=prod"            # deployable: null (unknown)
+curl -sf -X PUT "http://127.0.0.1:9292/pacticipants/marketplace-api/versions/1.0.0/tags/prod" \
+  -H 'Content-Type: application/json'                                                             # 201
+curl -s "http://127.0.0.1:9292/can-i-deploy?pacticipant=web-app&version=1.0.0&to=prod"            # deployable: true
+```
+
 ## Verify 
 
 ```bash

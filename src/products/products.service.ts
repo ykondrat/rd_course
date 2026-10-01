@@ -4,16 +4,7 @@ import { DatabaseService } from '../database/database.service';
 import { AppError } from '../common/problem';
 import { buildPage, Page } from '../common/pagination';
 import { decodeCursor } from '../common/cursor';
-
-interface ProductRow {
-  id: number;
-  title: string;
-  price_cents: number;
-  currency: string;
-  sku: string;
-  description: string | null;
-  created_at: string;
-}
+import { Keyset, ProductRow, ProductsRepository, UpdateField } from './products.repository';
 
 export interface Product {
   id: number;
@@ -25,38 +16,26 @@ export interface Product {
   created_at: string;
 }
 
-const COLS = 'id, title, price_cents, currency, sku, description, created_at';
-
 @Injectable()
 export class ProductsService {
-  constructor(private readonly db: DatabaseService) {}
+  constructor(
+    private readonly db: DatabaseService,
+    private readonly products: ProductsRepository,
+  ) {}
 
   async list(limit: number, cursor?: string): Promise<Page<Product>> {
-    const params: unknown[] = [];
-    let where = '';
-
-    if (cursor) {
-      const { c, id } = decodeCursor(cursor);
-
-      params.push(c, id);
-      where = 'WHERE (created_at, id) < ($1, $2)';
-    }
-
-    params.push(limit + 1);
-
-    const sql = `SELECT ${COLS} FROM products ${where} ORDER BY created_at DESC, id DESC LIMIT $${params.length}`;
-    const { rows } = await this.db.query(sql, params);
-    const page = buildPage(rows as ProductRow[], limit);
+    const rows = await this.products.list(this.db, { limit: limit + 1, after: this.toKeyset(cursor) });
+    const page = buildPage(rows, limit);
 
     return { items: page.items.map((r) => this.serialize(r)), next_cursor: page.next_cursor };
   }
 
   async getById(id: number): Promise<Product> {
-    const { rows } = await this.db.query(`SELECT ${COLS} FROM products WHERE id = $1`, [id]);
+    const row = await this.products.findById(this.db, id);
 
-    if (rows.length === 0) throw new AppError(404, `Product ${id} not found`);
+    if (!row) throw new AppError(404, `Product ${id} not found`);
 
-    return this.serialize(rows[0] as ProductRow);
+    return this.serialize(row);
   }
 
   async create(dto: {
@@ -66,40 +45,30 @@ export class ProductsService {
     sku: string;
     description?: string;
   }): Promise<Product> {
-    const { rows } = await this.db.query(
-      `INSERT INTO products (title, price_cents, currency, sku, description)
-       VALUES ($1, $2, $3, $4, $5)
-       RETURNING ${COLS}`,
-      [dto.title, dto.price_cents, dto.currency, dto.sku, dto.description ?? null],
-    );
-
-    return this.serialize(rows[0] as ProductRow);
+    return this.serialize(await this.products.insert(this.db, dto));
   }
 
   async patch(id: number, dto: Record<string, unknown>): Promise<Product> {
     const allowed = ['title', 'price_cents', 'currency', 'sku', 'description'];
-    const sets: string[] = [];
-    const params: unknown[] = [];
+    const fields: UpdateField[] = allowed
+      .filter((key) => Object.prototype.hasOwnProperty.call(dto, key))
+      .map((key) => ({ column: key, value: dto[key] }));
 
-    for (const key of allowed) {
-      if (Object.prototype.hasOwnProperty.call(dto, key)) {
-        params.push(dto[key]);
-        sets.push(`${key} = $${params.length}`);
-      }
-    }
+    if (fields.length === 0) throw new AppError(400, 'No updatable fields were provided.');
 
-    if (sets.length === 0) throw new AppError(400, 'No updatable fields were provided.');
+    const row = await this.products.update(this.db, id, fields);
 
-    params.push(id);
+    if (!row) throw new AppError(404, `Product ${id} not found`);
 
-    const { rows } = await this.db.query(
-      `UPDATE products SET ${sets.join(', ')} WHERE id = $${params.length} RETURNING ${COLS}`,
-      params,
-    );
+    return this.serialize(row);
+  }
 
-    if (rows.length === 0) throw new AppError(404, `Product ${id} not found`);
+  private toKeyset(cursor?: string): Keyset | undefined {
+    if (!cursor) return undefined;
 
-    return this.serialize(rows[0] as ProductRow);
+    const { c, id } = decodeCursor(cursor);
+
+    return { createdAt: c, id };
   }
 
   private serialize(row: ProductRow): Product {
