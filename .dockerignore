@@ -1,5 +1,9 @@
 node_modules
 dist
+dist-test
+test
+pacts
+.github
 .git
 .gitignore
 spec.json
