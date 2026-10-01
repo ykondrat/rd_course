@@ -34,6 +34,42 @@ npm start
 
 `npm run db:setup` applies `db/*.sql` against an external Postgres.
 
+## Data layer ops
+
+The app never talks to Postgres directly — it goes through PgBouncer (`edoburu/pgbouncer`, `pool_mode = transaction`), the connection funnel that lets many app instances share a few backend connections (200 clients ← 5 server connections).
+Config lives in `pgbouncer/pgbouncer.ini` (+ `userlist.txt`); PgBouncer is published on 6432 — Postgres stays on 5432 for migrations/admin only.
+
+```bash
+docker compose up -d --wait                                       # postgres + pgbouncer + api
+psql -h 127.0.0.1 -p 6432 -U admin -d appdb -c "SELECT 1"         # served through PgBouncer
+psql -h 127.0.0.1 -p 6432 -U admin -d pgbouncer -c "SHOW POOLS"   # appdb, pool_mode=transaction
+```
+
+### Backup and restore
+
+```bash
+export DATABASE_URL=postgres://admin:admin-bootstrap-only@127.0.0.1:6432/appdb
+bash scripts/backup.sh          # pg_dump -Fc -> backups/appdb-<date>.dump (prints path + TOC)
+bash scripts/restore-drill.sh   # restore into a clean throwaway container -> MATCH or exit 1
+```
+
+`backup.cron` schedules the nightly `pg_dump` (02:30). Measured RTO/RPO and the last drill result are in [`RESTORE-DRILL.md`](RESTORE-DRILL.md).
+Backups run as `admin` (superuser) so the dump captures every object; the app keeps its least-privilege `app_user`.
+
+### Why transaction mode — and what it breaks
+
+`transaction` mode lends a real Postgres backend to a client only for the length of one transaction, then returns it to the pool — the mode that scales web apps. 
+But because the backend is shared, session state does not survive between transactions (a different `pg_backend_pid()`each time). 
+These stop working in transaction mode:
+
+- **`SET` / `RESET`** of session GUCs — use `SET LOCAL` inside the transaction instead;
+- **named prepared statements** — the classic `prepared statement "s0" already exists` trap;
+  PgBouncer ≥ 1.21 can track them if you set `max_prepared_statements > 0` (we ship `0`);
+- **session-level advisory locks** (`pg_advisory_lock`) — use transaction-scoped `pg_advisory_xact_lock`;
+- also `LISTEN`/`NOTIFY`, `WITH HOLD` cursors, session temp tables, and `LOAD`.
+
+Our app is transaction-mode-safe: raw `pg` driver (no named prepared statements by default), no `LISTEN`, no session `SET`, self-contained transactions.
+
 ## Grading
 
 The grader has no access to my Infisical vault (`.secrets/` is git-ignored, the cloud
@@ -70,6 +106,33 @@ npm run report            # top products by revenue (SUM + GROUP BY via QueryBui
 npm run demo:race         # 50 parallel checkouts, stock=10 → exactly 10 succeed, 0 oversell, exit 0
 npm run demo:workers      # ≥2 workers via FOR UPDATE SKIP LOCKED → each task once, faster than serial
 npm run demo:retry        # provokes 40001 under REPEATABLE READ, retries → final state correct
+```
+
+### Data layer ops — PgBouncer + backup/restore
+
+The app runs through PgBouncer; `backup.sh` / `restore-drill.sh` read the connection from
+`$DATABASE_URL` (pointing at PgBouncer). Continue from the block above (schema migrated + seeded):
+
+```bash
+docker compose up -d --wait                                       # postgres + pgbouncer + api
+psql -h 127.0.0.1 -p 6432 -U admin -d appdb -c "SELECT 1"         # → 1, through PgBouncer
+psql -h 127.0.0.1 -p 6432 -U admin -d pgbouncer -c "SHOW POOLS"   # appdb, pool_mode=transaction
+
+export DATABASE_URL=postgres://admin:admin-bootstrap-only@127.0.0.1:6432/appdb   # admin dumps everything
+# SKIP_VAULT=1 is already exported above
+bash scripts/with-secrets.sh dev bash scripts/backup.sh           # → backups/appdb-<date>.dump, exit 0
+bash scripts/with-secrets.sh dev bash scripts/restore-drill.sh    # → MATCH, exit 0
+```
+
+Both scripts read `$DATABASE_URL` from the environment (the wrapper just forwards it under
+`SKIP_VAULT=1`). `migrate` + `seed` above populate the `orders` table the drill round-trips —
+without them it would restore an empty DB (a trivial 0-row MATCH). Static checks:
+
+```bash
+grep -E '^\s*pool_mode\s*=\s*transaction' pgbouncer/pgbouncer.ini          # transaction mode in repo
+grep -E '^(export[[:space:]]+)?(DATABASE_URL|DB_URL)=' .env.example        # contract → PgBouncer :6432
+grep -cE '^(@(reboot|daily|midnight|hourly)|([0-9*/,-]+[[:space:]]+){4}[0-9*/,-]+)[[:space:]]+.*backup' backup.cron  # ≥ 1
+grep -iE 'RTO|RPO' RESTORE-DRILL.md                                        # both, with measured values
 ```
 
 Seed idempotency — row counts are identical after the second `npm run seed`:

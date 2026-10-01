@@ -6,7 +6,7 @@ services:
     environment:
       NODE_ENV: production
       PORT: 3000
-      PGHOST: postgres
+      PGHOST: pgbouncer
       PGPORT: 5432
       PGUSER: app_user
       PGDATABASE: appdb
@@ -17,7 +17,7 @@ services:
     ports:
       - "3000:3000"
     depends_on:
-      postgres:
+      pgbouncer:
         condition: service_healthy
     restart: unless-stopped
 
@@ -40,5 +40,41 @@ services:
       retries: 10
       start_period: 10s
 
+  pgbouncer:
+    image: edoburu/pgbouncer:v1.24.1-p1
+    ports:
+      - "6432:5432"
+    volumes:
+      - ./pgbouncer/pgbouncer.ini:/etc/pgbouncer/pgbouncer.ini:ro
+      - ./pgbouncer/userlist.txt:/etc/pgbouncer/userlist.txt:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ['CMD-SHELL', "PGPASSWORD=apppass psql -h 127.0.0.1 -p 5432 -U app_user -d appdb -c 'SELECT 1' >/dev/null"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+    restart: unless-stopped
+
+  restore:
+    image: postgres:17
+    profiles: ["drill"]
+    ports:
+      - "6433:5432"
+    environment:
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: admin-bootstrap-only
+      POSTGRES_DB: appdb
+    volumes:
+      - pgdata-restore:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U admin -d appdb']
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
 volumes:
   pgdata:
+  pgdata-restore:
