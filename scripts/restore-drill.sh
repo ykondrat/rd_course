@@ -16,8 +16,12 @@ CHECKSUM="SELECT count(*) || '|' || coalesce(sum(total_cents), 0) FROM orders"
 
 reset_restore() {
   docker compose --profile drill rm -sf restore >/dev/null 2>&1 || true
-  local vol
-  vol="$(docker volume ls -q -f 'label=com.docker.compose.volume=pgdata-restore' 2>/dev/null || true)"
+  local project vol
+
+  project="${COMPOSE_PROJECT_NAME:-$(basename "$PWD" | tr '[:upper:]' '[:lower:]')}"
+  vol="$(docker volume ls -q \
+    -f "label=com.docker.compose.project=${project}" \
+    -f 'label=com.docker.compose.volume=pgdata-restore' 2>/dev/null || true)"
   [ -n "$vol" ] && docker volume rm -f $vol >/dev/null 2>&1 || true
 }
 
