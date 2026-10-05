@@ -7,8 +7,15 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
+    "build:test": "tsc -p tsconfig.test.json",
     "start": "npm run build && node dist/main.js",
     "start:dev": "tsx watch src/main.ts",
+    "test:integration": "npm run build:test && jest dist-test/test/integration",
+    "test:e2e": "npm run build:test && NODE_OPTIONS=--experimental-vm-modules jest dist-test/test/e2e",
+    "test:contract": "npm run build:test && jest dist-test/test/contract/orders.consumer.pact.test.js",
+    "verify:provider": "npm run build:test && NODE_OPTIONS=--experimental-vm-modules jest dist-test/test/contract/orders.provider.verify.test.js",
+    "broker:up": "docker compose up -d --wait pactbroker",
+    "broker:down": "docker compose stop pactbroker pactbroker-db",
     "migrate": "bash scripts/with-secrets.sh dev npx typeorm migration:run -d dist/data-source.js",
     "migrate:generate": "bash scripts/with-secrets.sh dev npx typeorm migration:generate -d dist/data-source.js src/migrations/Migration",
     "migrate:show": "bash scripts/with-secrets.sh dev npx typeorm migration:show -d dist/data-source.js",
@@ -45,10 +52,17 @@
     "zod": "^4.5.4"
   },
   "devDependencies": {
+    "@nestjs/testing": "^11.2.3",
+    "@pact-foundation/pact": "^17.0.1",
     "@redocly/cli": "^2.49.0",
+    "@testcontainers/postgresql": "^12.1.0",
     "@types/express": "^5.0.6",
+    "@types/jest": "^30.0.0",
     "@types/node": "^24.13.3",
     "@types/pg": "^8.23.1",
+    "@types/supertest": "^6.0.3",
+    "jest": "^30.4.2",
+    "supertest": "^7.2.2",
     "tsx": "^4.23.13",
     "typescript": "^5.9.3"
   }

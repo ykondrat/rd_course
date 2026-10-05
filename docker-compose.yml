@@ -59,6 +59,34 @@ services:
       start_period: 5s
     restart: unless-stopped
 
+  pactbroker-db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: pactbroker
+      POSTGRES_PASSWORD: pactbroker
+      POSTGRES_DB: pactbroker
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U pactbroker -d pactbroker']
+      interval: 2s
+      timeout: 2s
+      retries: 15
+
+  pactbroker:
+    image: pactfoundation/pact-broker:2.142.0-pactbroker2.120.0
+    ports:
+      - "9292:9292"
+    environment:
+      PACT_BROKER_DATABASE_URL: postgres://pactbroker:pactbroker@pactbroker-db/pactbroker
+      PACT_BROKER_ALLOW_PUBLIC_READ: "true"
+    depends_on:
+      pactbroker-db:
+        condition: service_healthy
+    healthcheck:
+      test: ['CMD-SHELL', 'wget -q -O /dev/null http://127.0.0.1:9292/diagnostic/status/heartbeat']
+      interval: 3s
+      timeout: 3s
+      retries: 30
+
   restore:
     image: postgres:17
     profiles: ["drill"]

@@ -2,12 +2,12 @@ import { Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
-import { Pool, PoolClient, QueryResult, types } from 'pg';
+import { Pool, PoolClient, QueryResult } from 'pg';
 
 import type { Env } from '../config/env.schema';
+import { installPgTypeParsers } from './pg-type-parsers';
 
-types.setTypeParser(20, (v: string | null) => (v === null ? null : Number(v)));
-types.setTypeParser(1184, (v: string | null) => (v === null ? null : new Date(v).toISOString()));
+installPgTypeParsers();
 
 const PASSWORD_FILE = resolve(process.cwd(), 'secrets', 'db_password');
 
