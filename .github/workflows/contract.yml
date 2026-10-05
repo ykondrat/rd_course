@@ -42,7 +42,23 @@ jobs:
       - name: Verify the provider (real app, publishVerificationResult)
         run: npm run verify:provider
 
-      - name: can-i-deploy web-app -> prod (gate)
+      - name: can-i-deploy web-app -> prod BEFORE promoting the provider (must be blocked)
+        run: |
+          RESP=$(curl -sf "$PACT_BROKER_URL/can-i-deploy?pacticipant=web-app&version=$CONSUMER_VERSION&to=prod")
+          echo "$RESP"
+          if echo "$RESP" | grep -qE '"deployable":[[:space:]]*true'; then
+            echo "::error::can-i-deploy was deployable before the provider reached prod — the gate is not actually gating"
+            exit 1
+          fi
+          echo "can-i-deploy: correctly BLOCKED — no verified marketplace-api version is in prod yet"
+
+      - name: Tag the provider version as prod (record the deploy)
+        run: |
+          curl -sf -X PUT \
+            "$PACT_BROKER_URL/pacticipants/marketplace-api/versions/$PROVIDER_VERSION/tags/prod" \
+            -H 'Content-Type: application/json'
+
+      - name: can-i-deploy web-app -> prod AFTER promoting the provider (gate)
         run: |
           RESP=$(curl -sf "$PACT_BROKER_URL/can-i-deploy?pacticipant=web-app&version=$CONSUMER_VERSION&to=prod")
           echo "$RESP"
@@ -52,9 +68,3 @@ jobs:
             echo "::error::can-i-deploy: NOT deployable — deploy blocked"
             exit 1
           fi
-
-      - name: Tag the provider version as prod (record the deploy)
-        run: |
-          curl -sf -X PUT \
-            "$PACT_BROKER_URL/pacticipants/marketplace-api/versions/$PROVIDER_VERSION/tags/prod" \
-            -H 'Content-Type: application/json'
