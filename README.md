@@ -371,6 +371,8 @@ npm run test:contract      # PactV3 consumer -> pacts/web-app-marketplace-api.js
 npm run verify:provider    # the real app verifies the contract (local pact file by default)
 ```
 
+`pacts/` is a generated artifact and is git-ignored (see `.gitignore`), so the pact file is not committed. In its default local mode `verify:provider` reads `pacts/web-app-marketplace-api.json`, which means `test:contract` must have run first to (re)generate it; in CI the two steps run in order, so the file always exists before verification.
+
 Repository integration tests use transaction + ROLLBACK: one container per file, each test runs on its own client inside `BEGIN … ROLLBACK`. Cleanup is ~0 ms and, crucially, reliable (it runs even when a test throws), so `npm run test:integration && npm run test:integration` is green with no manual cleanup. This is possible only because the repositories accept a `Queryable` (`Pool | PoolClient | DatabaseService`) — in prod they get the pool, in tests a transaction client, same code. The E2E suite instead uses one fresh container per file: its create→read flow goes through the app's own transactions (idempotency + inserts), which can't be wrapped in an outer rollback; a disposable container per run keeps it repeatable. The test DB is never configured via env/secrets — it comes from `container.getConnectionUri()` at runtime.
 
 ### Pact Broker + can-i-deploy
@@ -381,7 +383,7 @@ The broker is a compose service (`pactbroker` + internal `pactbroker-db`, health
 npm run broker:up          # docker compose up -d --wait pactbroker  (heartbeat 200)
 ```
 
-The CI job `.github/workflows/contract.yml` runs: publish contract → `verify:provider` (with `publishVerificationResult`) → tag the provider version `prod` → can-i-deploy, which fails the job if `deployable` is not `true`. The broker URL is a local-compose default (not a secret); `PACT_BROKER_TOKEN` comes only from `process.env` (GitHub secrets in CI, the Infisical store locally via `bash scripts/with-secrets.sh dev npm run verify:provider`, and `SKIP_VAULT=1 …` runs the exact same command without the vault). No token is ever hard-coded.
+The CI job `.github/workflows/contract.yml` runs: publish contract → `verify:provider` (with `publishVerificationResult`) → can-i-deploy, which fails the job if `deployable` is not `true` → tag the provider version `prod` (recording the deploy). The tag comes **after** the gate on purpose: tagging first would set the prod provider to the very SHA we just verified against, so can-i-deploy could never return `false`. The broker URL is a local-compose default (not a secret); `PACT_BROKER_TOKEN` comes only from `process.env` (GitHub secrets in CI, the Infisical store locally via `bash scripts/with-secrets.sh dev npm run verify:provider`, and `SKIP_VAULT=1 …` runs the exact same command without the vault). No token is ever hard-coded.
 
 The gate is real — both states. Same `can-i-deploy` call, before and after tagging the provider version `prod` (the provider must go to prod first — "is most right"):
 

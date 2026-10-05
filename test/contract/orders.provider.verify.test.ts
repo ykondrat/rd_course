@@ -8,8 +8,6 @@ import { Verifier, VerifierOptions } from '@pact-foundation/pact';
 import { PgHandle, startPg } from '../integration/testkit/pg-container';
 import { applyContainerEnv } from '../integration/testkit/app-env';
 
-const PROVIDER_PORT = 3101;
-
 const SEED_ORDER_7 = `
   INSERT INTO users (id, email, full_name)
     OVERRIDING SYSTEM VALUE VALUES (7, 'contract-user@example.com', 'Contract User')
@@ -28,6 +26,7 @@ const SEED_ORDER_7 = `
 describe('Contract (provider): marketplace-api satisfies the web-app contract', () => {
   let pg: PgHandle;
   let app: INestApplication;
+  let providerBaseUrl: string;
 
   beforeAll(async () => {
     pg = await startPg('(provider)');
@@ -37,7 +36,11 @@ describe('Contract (provider): marketplace-api satisfies the web-app contract', 
 
     app = await createApp();
 
-    await app.listen(PROVIDER_PORT);
+    await app.listen(0);
+
+    const { port } = new URL(await app.getUrl());
+
+    providerBaseUrl = `http://127.0.0.1:${port}`;
   });
 
   afterAll(async () => {
@@ -50,7 +53,7 @@ describe('Contract (provider): marketplace-api satisfies the web-app contract', 
 
     const options: VerifierOptions = {
       provider: 'marketplace-api',
-      providerBaseUrl: `http://127.0.0.1:${PROVIDER_PORT}`,
+      providerBaseUrl,
       logLevel: 'warn',
       stateHandlers: {
         'order 7 exists': async () => {
