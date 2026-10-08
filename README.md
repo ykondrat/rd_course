@@ -346,19 +346,58 @@ npm run infisical:down                     # tear down + wipe .secrets/
 
 ## API
 
-| Method & path          | operationId     | Notes                                                                               |
-|------------------------|-----------------|-------------------------------------------------------------------------------------|
-| `GET /products`        | listProducts    | cursor pagination (`limit`, `cursor`) -> `{ items, next_cursor }`                   |
-| `POST /products`       | createProduct   | create; `201` + `Location`                                                          |
-| `GET /products/{id}`   | getProduct      | `200` / `404`                                                                       |
-| `PATCH /products/{id}` | updateProduct   | partial update (`minProperties: 1`) -> `200` / `404`                                |
-| `GET /orders`          | listOrders      | cursor pagination                                                                   |
-| `POST /orders`         | createOrder     | `user_id` + `items` body, `Idempotency-Key` required; `201` / `400` / `409` / `422` |
-| `GET /orders/{id}`     | getOrder        | `200` / `404`                                                                       |
+| Method & path               | operationId       | Notes                                                                                   |
+|-----------------------------|-------------------|-----------------------------------------------------------------------------------------|
+| `GET /products`             | listProducts      | cursor pagination (`limit`, `cursor`) -> `{ items, next_cursor }`                       |
+| `POST /products`            | createProduct     | create; `201` + `Location`                                                              |
+| `GET /products/{id}`        | getProduct        | `200` / `404`                                                                           |
+| `PATCH /products/{id}`      | updateProduct     | partial update (`minProperties: 1`) -> `200` / `404`                                    |
+| `GET /orders`               | listOrders        | cursor pagination                                                                       |
+| `POST /orders`              | createOrder       | `user_id` + `items` body, `Idempotency-Key` required; `201` / `400` / `409` / `422`     |
+| `GET /orders/{id}`          | getOrder          | `200` / `404`                                                                           |
+| `PATCH /orders/{id}/status` | updateOrderStatus | change status (`new`/`paid`/`shipped`) → `200` / `404`; emits a realtime event          |
+| `GET /orders/{id}/events`   | streamOrderEvents | SSE stream (`text/event-stream`) of this order's status changes; `Last-Event-ID` resume |
 
 - **Cursor** is an opaque `base64url` token; `next_cursor: null` means no more pages.
 - **Idempotency-Key** (on `POST /orders`): same key + same body -> the original `201` replayed with `Idempotency-Replay: true`; same key + different body -> `422`; key still in flight -> `409`. The key claim, the order, and its items are all committed in one transaction.
 - **Errors** are RFC 9457 `application/problem+json` with `type / title / status / detail / instance` (+ `code` / `errors[]`). Money is integer minor units (`*_cents`).
+
+## Trade-offs: WebSocket vs SSE
+
+For production order notifications we keep SSE. Order status is a one-way server→client feed, and SSE delivers it over a plain HTTP/1.1 response — with the browser's built-in auto-reconnect and `Last-Event-ID` resume we get for free — so there is no protocol upgrade, no sticky-session requirement, and no socket to babysit. WebSocket earns its keep only when the client must also push at high frequency (chat, presence, collaborative editing), which an order feed never does; here its full-duplex channel is cost we would pay for nothing.
+
+| Criterion           | WebSocket (socket.io)                                                         | SSE (`text/event-stream`)                                                     |
+|---------------------|-------------------------------------------------------------------------------|-------------------------------------------------------------------------------|
+| Channel direction   | full-duplex (client ⇄ server)                                                 | one-way (server → client) — exactly the shape of an order feed                |
+| Reconnect / resume  | manual; the app rebuilds room membership on every (re)connect                 | automatic in the browser `EventSource`, plus `Last-Event-ID` replay for free  |
+| Infrastructure      | HTTP upgrade + long-lived socket; sticky sessions or a Redis adapter to scale | plain HTTP/1.1 response; works through any reverse proxy, no upgrade          |
+| Cost per event      | cheap per message, but a persistent connection + heartbeats held per client   | cheap; one streamed response, no per-message handshake                        |
+
+### Running the realtime demo
+
+Build, seed the fixtures, and start the API (the socket.io gateway shares the HTTP port — no second server):
+
+```bash
+npm run build && npm start        # API + socket.io on http://localhost:3000
+npm run seed                      # deterministic fixtures: users 1-8, products 1-10, orders 1-12
+```
+
+Drive it headless — each run self-seeds two orders, joins two WS rooms as user 1, then flips order A's status:
+
+```bash
+npm run demo:realtime                 # A_RECEIVED=1  B_RECEIVED=0  (B listens to a different order's room)
+npm run demo:realtime -- --same-room  # A_RECEIVED=1  B_RECEIVED=1  (B listens to order A's room)
+```
+
+Or change a status by hand and watch any SSE subscriber of that order receive it live:
+
+```bash
+curl -sN http://localhost:3000/orders/1/events &                     # open the stream (stays open)
+curl -X PATCH http://localhost:3000/orders/1/status \
+  -H 'content-type: application/json' -d '{"status":"paid"}'         # → an id:/event:/data: block arrives
+```
+
+Both transports read one in-memory event bus (`OrderEventsService`: an RxJS `Subject` + a per-order id sequence and history buffer), so SSE can replay what a reconnecting client missed. That buffer is per-process: with two API instances the rooms live in each node's memory, so `io.to(room)` on the node that handled the PATCH never reaches a client connected to the other node — the fix is the socket.io Redis adapter, which fans every emit out over Redis Pub/Sub to all instances (L#23).
 
 ## Testing — integration, E2E, contract
 

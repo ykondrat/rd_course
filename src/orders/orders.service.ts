@@ -6,6 +6,7 @@ import { AppError } from '../common/problem';
 import { buildPage, Page } from '../common/pagination';
 import { decodeCursor } from '../common/cursor';
 import { Keyset } from '../products/products.repository';
+import { OrderEventsService } from './order-events.service';
 import { OrderItemRow, OrderRow, OrdersRepository } from './orders.repository';
 
 export interface OrderItem {
@@ -39,6 +40,7 @@ export class OrdersService {
   constructor(
     private readonly db: DatabaseService,
     private readonly orders: OrdersRepository,
+    private readonly events: OrderEventsService,
   ) {}
 
   async list(limit: number, cursor?: string): Promise<Page<Order>> {
@@ -60,6 +62,26 @@ export class OrdersService {
     const itemsByOrder = await this.loadItemsMap([id]);
 
     return this.assemble(row, itemsByOrder.get(id) ?? []);
+  }
+
+  async getOwnerId(id: number): Promise<number | null> {
+    const row = await this.orders.findOrderById(this.db, id);
+
+    return row ? row.user_id : null;
+  }
+
+  async updateStatus(id: number, status: string): Promise<Order> {
+    await this.db.withTransaction(async (client) => {
+      const updated = await this.orders.updateStatus(client, id, status);
+
+      if (!updated) throw new AppError(404, `Order ${id} not found`);
+    });
+
+    const order = await this.getById(id);
+
+    this.events.emit(order.id, order.status);
+
+    return order;
   }
 
   async create(key: string, body: CreateOrderBody): Promise<CreateResult> {
