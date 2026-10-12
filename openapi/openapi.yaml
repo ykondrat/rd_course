@@ -207,6 +207,70 @@ paths:
           $ref: '#/components/responses/NotFound'
         '500':
           $ref: '#/components/responses/InternalError'
+  /orders/{id}/status:
+    patch:
+      operationId: updateOrderStatus
+      summary: Change an order's status
+      tags:
+        - orders
+      parameters:
+        - $ref: '#/components/parameters/IdParam'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OrderStatusPatch'
+      responses:
+        '200':
+          description: The order with its new status.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Order'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /orders/{id}/events:
+    get:
+      operationId: streamOrderEvents
+      summary: Subscribe to an order's status events (SSE)
+      description: >-
+        Server-Sent Events stream of this order's status changes. The response
+        never closes: each change is pushed as an `id:`/`event:`/`data:` block.
+        A reconnecting client sends the last id it saw in the Last-Event-ID
+        header and the server replays everything newer from its buffer before
+        resuming the live stream. This route is excluded from response
+        validation — it is an unbounded stream, not a single JSON body.
+      tags:
+        - orders
+      parameters:
+        - $ref: '#/components/parameters/IdParam'
+        - name: Last-Event-ID
+          in: header
+          required: false
+          description: >-
+            Id of the last event the client already received; the server replays
+            every buffered event of this order with a greater id before resuming
+            the live stream.
+          schema:
+            type: string
+      responses:
+        '200':
+          description: An open text/event-stream of order status events.
+          content:
+            text/event-stream:
+              schema:
+                type: string
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
   /health:
     get:
       operationId: getHealth
@@ -574,6 +638,23 @@ components:
         total_cents: 535000
         currency: USD
         created_at: '2026-08-20T10:05:00Z'
+    OrderStatusPatch:
+      type: object
+      additionalProperties: false
+      required:
+        - status
+      description: >-
+        Status transition for an order. The value must be one of the three
+        allowed states (mirrors the orders.status CHECK constraint).
+      properties:
+        status:
+          type: string
+          enum:
+            - new
+            - paid
+            - shipped
+      example:
+        status: paid
     OrderPage:
       allOf:
         - $ref: '#/components/schemas/CursorPage'

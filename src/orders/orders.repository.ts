@@ -115,6 +115,15 @@ export class OrdersRepository {
     return (rows[0] as OrderRow) ?? null;
   }
 
+  async updateStatus(db: Queryable, id: number, status: string): Promise<OrderRow | null> {
+    const { rows } = await db.query(
+      `UPDATE orders SET status = $2 WHERE id = $1 RETURNING ${ORDER_COLS}`,
+      [id, status],
+    );
+
+    return (rows[0] as OrderRow) ?? null;
+  }
+
   async listOrders(db: Queryable, opts: { limit: number; after?: Keyset }): Promise<OrderRow[]> {
     const params: unknown[] = [];
     let where = '';
