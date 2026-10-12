@@ -39,7 +39,11 @@ async function changeStatus(orderId, status) {
 }
 
 function connectAndJoin(name, orderId) {
-  const socket = io(API_URL, { reconnectionDelay: 300, reconnectionDelayMax: 1000 });
+  const socket = io(API_URL, {
+    reconnectionDelay: 300,
+    reconnectionDelayMax: 1000,
+    auth: { userId: USER_ID },
+  });
   const received = { count: 0 };
 
   socket.on('order.status', (event) => {
@@ -51,7 +55,7 @@ function connectAndJoin(name, orderId) {
   socket.io.on('reconnect', (attempt) => console.log(`[${name}] reconnect УСПІШНИЙ після ${attempt} спроб`));
 
   const ready = new Promise((resolve, reject) => {
-    socket.on('connect', () => socket.emit('join', { orderId, userId: USER_ID }));
+    socket.on('connect', () => socket.emit('join', { orderId }));
     socket.on('joined', (answer) => {
       console.log(`[${name}] у кімнаті «${answer.room}»`);
       resolve();

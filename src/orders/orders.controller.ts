@@ -59,7 +59,10 @@ export class OrdersController {
       res.write(`id: ${e.id}\nevent: order.status\ndata: ${JSON.stringify(e)}\n\n`);
     };
 
-    for (const e of this.events.replay(id, Number(lastEventId ?? 0))) write(e);
+    const parsed = Number(lastEventId);
+    const since = Number.isFinite(parsed) ? parsed : 0;
+
+    for (const e of this.events.replay(id, since)) write(e);
 
     const sub = this.events.stream().pipe(filter((e) => e.orderId === id)).subscribe(write);
 

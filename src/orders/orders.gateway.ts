@@ -38,11 +38,17 @@ export class OrdersGateway implements OnModuleInit, OnGatewayConnection, OnGatew
   @SubscribeMessage('join')
   async join(
     @ConnectedSocket() client: Socket,
-    @MessageBody() body: { orderId: number; userId: number },
+    @MessageBody() body: { orderId: number },
   ): Promise<WsResponse<{ room?: string; error?: string }>> {
+    const userId = Number(client.handshake.auth?.userId);
+
+    if (!Number.isInteger(userId)) {
+      return { event: 'join:denied', data: { error: 'missing or invalid handshake identity' } };
+    }
+
     const ownerId = await this.orders.getOwnerId(body.orderId);
 
-    if (ownerId === null || ownerId !== body.userId) {
+    if (ownerId === null || ownerId !== userId) {
       return { event: 'join:denied', data: { error: `order ${body.orderId} is not yours` } };
     }
 
