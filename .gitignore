@@ -10,3 +10,5 @@ infisical/.env
 infisical/.secrets/
 *.log
 .idea
+.rabbitmq-state/
+.DS_Store

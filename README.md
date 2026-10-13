@@ -160,6 +160,35 @@ grep -rniE --include='*.ts' --exclude-dir=node_modules --exclude-dir=dist "skip[
 grep -rniE --include='*.ts' --exclude-dir=node_modules --exclude-dir=dist "40001|40P01" .
 ```
 
+### Async events over RabbitMQ
+
+The three demos need only the broker (the processed-ids store is a file on disk; no DB). `--wait` is non-negotiable for RabbitMQ: the Erlang node accepts TCP before it accepts `basic.publish`, so health is gated on `rabbitmq-diagnostics check_running`, not an open port. 
+`BROKER_URL` uses scheme `amqp` and the AMQP port `5672` — not `15672`, which answers HTTP (the management UI), not AMQP.
+
+```bash
+docker compose up -d --wait rabbit
+export BROKER_URL=amqp://app:app@127.0.0.1:5672
+export SKIP_VAULT=1
+npm ci
+npx tsc --noEmit
+npm run build
+
+npm run demo:publish
+npm run demo:dlq
+npm run demo:duplicate
+```
+
+Static checks — no broker needed:
+
+```bash
+grep -rniE --include='*.ts' --include='*.json' --exclude-dir=node_modules --exclude-dir=dist \
+  "dead[ _-]*letter[ _-]*(exchange|routing)" .
+
+grep -rniE --include='*.ts' --exclude-dir=node_modules --exclude-dir=dist "prefetch|basic[._-]?qos" .
+
+node -e "const s=require('./package.json').scripts;const bad=['demo:publish','demo:dlq','demo:duplicate'].filter(k=>/with-secrets\.sh/.test(s[k]||'')===false);console.log(bad.length===0?'OK':'missing wrapper: '+bad.join(', '));process.exit(bad.length===0?0:1)"
+```
+
 ## Concurrency
 
 The checkout — decrement `stock`, debit the buyer's `balance_cents`, insert the `order` + its `order_item`, and enqueue a post-processing `task` — runs in one transaction.
@@ -398,6 +427,86 @@ curl -X PATCH http://localhost:3000/orders/1/status \
 ```
 
 Both transports read one in-memory event bus (`OrderEventsService`: an RxJS `Subject` + a per-order id sequence and history buffer), so SSE can replay what a reconnecting client missed. That buffer is per-process: with two API instances the rooms live in each node's memory, so `io.to(room)` on the node that handled the PATCH never reaches a client connected to the other node — the fix is the socket.io Redis adapter, which fans every emit out over Redis Pub/Sub to all instances (L#23).
+
+## Async-events RabbitMQ
+
+Here a broker sits between the service and its readers and stores the event until a consumer takes responsibility. 
+That single difference — transport vs broker — is paid for with three separate bills:
+
+| Bill                       | How it shows up                                                                | What we pay                              |
+|----------------------------|--------------------------------------------------------------------------------|------------------------------------------|
+| Work can vanish            | ack **before** the effect (autoAck) → a crash takes the whole in-flight window | manual ack **after** the effect          |
+| Work can run twice         | ack **after** the effect, but the ack never arrived → the broker redelivers    | an **idempotent effect** at the consumer |
+| Work can get stuck forever | a message that will never process loops in the queue, heating the cluster      | a **DLQ as a separate circuit**          |
+
+> **The naming that matters.** `ack` is not "it arrived" — it is "I no longer demand a
+> retry." From that one sentence everything follows: ack too early → loss, ack too late
+> → duplicate, there is no third option. **Exactly-once *delivery* does not exist** — not
+> in RabbitMQ, not anywhere. What this HW ships is **at-least-once delivery + an
+> idempotent effect**, and together they produce an **exactly-once *result***. Saying
+> "RabbitMQ gives exactly-once" would be wrong. And two different words:
+> **idempotency** is a property of the *operation* (`UPDATE … SET status='packed'` is
+> idempotent; `qty = qty - 1` is not); an **idempotency key** is the *tool* that makes a
+> non-idempotent operation safe to repeat — here, a stored set of processed `eventId`s.
+
+**Topology** (declared by the consumer/bootstrap in `assertTopology`, **not** the producer — the producer must not know who listens):
+
+```
+shop.events (topic) --[order.placed]--> orders.order-placed (quorum, x-dead-letter-exchange=shop.events.dlx)
+                                                 │ reject(requeue=false)
+                                                 ▼
+shop.events.dlx (fanout) ----------------> orders.order-placed.dlq (quorum)
+```
+
+The producer side lives in the business operation: `OrdersService.create()` publishes
+`order.placed` on a **confirm channel** (`createConfirmChannel` + `waitForConfirms`) only
+**after** the DB commit, and only for a fresh order (not an idempotency replay). The
+event is a deliberate contract — `eventId`, `type`, `occurredAt`, `data` — not an ORM
+entity spread; `eventId = order-placed:<orderId>` is **stable**, so a redelivery is
+recognisable as a duplicate. Publishing is best-effort: the order is already committed,
+so a broker outage logs a warning rather than failing the request (see the gap below).
+
+**prefetch = 10, justified.** Handling one `order.placed` is a processed-set lookup plus a
+file append — a few milliseconds. By `prefetch × handling-time < consumer_timeout` (stock
+30 min = 1 800 000 ms): `10 × ~ms ≪ 1.8M`, so throughput isn't round-trip-bound while a
+crash re-queues at most 10 — not the broker default `0` (no limit, first consumer grabs the
+whole queue), not the cargo-cult `1` (worst for light tasks).
+
+**DLQ as a circuit.** The work queue carries `x-dead-letter-exchange`; a poisoned message
+is `reject`ed with `requeue=false` and dead-letters to `shop.events.dlx` → the DLQ, where
+`demo:dlq` reads the reason from `x-death` / `x-first-death-reason` — `rejected`, one of
+the only four reasons (`rejected | expired | maxlen | delivery_limit`; a fifth does not
+exist, and queue-TTL expiry is **not** one of them).
+
+**Numbers from my runs** (three runs, RabbitMQ 4.2.9 on `:5672`, identical each time):
+
+| Demo                     | Output (`key=value`)                                         |
+|--------------------------|--------------------------------------------------------------|
+| `npm run demo:publish`   | `published=5 delivered=5 effect=5 acked=5 dlq=0 prefetch=10` |
+| `npm run demo:dlq`       | `rejected=1 work=0 dlq=1 dlq-reason=rejected effect=0`       |
+| `npm run demo:duplicate` | `deliveries=2 effect=1 skipped=1`                            |
+
+`demo:duplicate` forces the redelivery with **`nack(requeue=true)` after the effect is
+already applied** — one of the three legal forms the brief allows; it models "crashed
+between the effect and the ack: work done, no receipt, broker returns it." `deliveries=2`
+is the point: a `deliveries=1` would mean no duplicate happened at all and the demo proved
+nothing. On the redelivery the processed-ids store says "already seen", so the effect is
+**not** applied twice — only `effect=1`.
+
+**Two honest gaps, both HW-22's job.** (1) Between the order's `COMMIT` and the `publish`
+there is a window where the DB has the order but the broker never got the event — closed by
+a **transactional outbox** (write the event into the same DB transaction, relay it out
+separately). (2) Between `remember(eventId)` and `applyEffect()` there is a smaller window —
+closed not by a smaller gap but by a **shared `COMMIT`**: the processed mark and the effect
+in one transaction in one database (`processed_messages`). Here the processed store is a
+file on disk — it **survives a consumer restart** (unlike an in-process `Set`/`Map`, which
+would not), which is all this step needs; the transactional version is L#22.
+
+**Broker & queue type.** RabbitMQ **4.2.9** — the 4.2.x **LTS** line (commercial support to
+2030-06-30); 4.3.x is the current non-LTS line. The `-management` image serves the UI on
+`:15672` where a dead-lettered message's `x-death` headers are inspectable. Queues are
+**quorum** (`x-queue-type: quorum`), the 2026 default; classic mirroring (`ha-mode`) was
+removed in 4.0, so it is not proposed.
 
 ## Testing — integration, E2E, contract
 

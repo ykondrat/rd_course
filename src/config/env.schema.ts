@@ -13,6 +13,7 @@ export const EnvSchema = z.object({
   PGADMIN_USER: z.string().min(1).optional(),
   PGADMIN_PASSWORD: z.string().min(1).optional(),
   OPENAPI_SPEC: z.string().min(1).default('openapi/openapi.yaml'),
+  BROKER_URL: z.string().min(1).default('amqp://app:app@127.0.0.1:5672'),
 });
 
 export type Env = z.infer<typeof EnvSchema>;
@@ -35,4 +36,10 @@ export function validate(config: Record<string, unknown>): Env {
 
 export function loadEnv(source: NodeJS.ProcessEnv = process.env): Env {
   return validate(source);
+}
+
+export const BrokerEnvSchema = z.object({ BROKER_URL: EnvSchema.shape.BROKER_URL });
+
+export function loadBrokerEnv(source: NodeJS.ProcessEnv = process.env): { BROKER_URL: string } {
+  return BrokerEnvSchema.parse(source);
 }
