@@ -452,7 +452,7 @@ That single difference — transport vs broker — is paid for with three separa
 **Topology** (declared by the consumer/bootstrap in `assertTopology`, **not** the producer — the producer must not know who listens):
 
 ```
-shop.events (topic) --[order.placed]--> orders.order-placed (quorum, x-dead-letter-exchange=shop.events.dlx)
+shop.events (topic) --[order.placed]--> orders.order-placed (quorum; DLX via policy → shop.events.dlx)
                                                  │ reject(requeue=false)
                                                  ▼
 shop.events.dlx (fanout) ----------------> orders.order-placed.dlq (quorum)
@@ -472,11 +472,15 @@ file append — a few milliseconds. By `prefetch × handling-time < consumer_tim
 crash re-queues at most 10 — not the broker default `0` (no limit, first consumer grabs the
 whole queue), not the cargo-cult `1` (worst for light tasks).
 
-**DLQ as a circuit.** The work queue carries `x-dead-letter-exchange`; a poisoned message
-is `reject`ed with `requeue=false` and dead-letters to `shop.events.dlx` → the DLQ, where
-`demo:dlq` reads the reason from `x-death` / `x-first-death-reason` — `rejected`, one of
-the only four reasons (`rejected | expired | maxlen | delivery_limit`; a fifth does not
-exist, and queue-TTL expiry is **not** one of them).
+**DLQ as a circuit.** The work queue's dead-letter-exchange is applied by a **policy** (set
+via the management API — `pattern: ^orders\.order-placed$`, `definition.dead-letter-exchange`),
+not by a queue `x-argument`. A policy is overwrite-safe and can be changed at runtime, so the
+queue is **never recreated** — recreating it would destroy unacked messages, and `x-arguments`
+are immutable (changing one gives `406 PRECONDITION_FAILED`). A poisoned message is `reject`ed
+with `requeue=false` and dead-letters to `shop.events.dlx` → the DLQ, where `demo:dlq` reads the
+reason from `x-death` / `x-first-death-reason` — `rejected`, one of the only four reasons
+(`rejected | expired | maxlen | delivery_limit`; a fifth does not exist, and queue-TTL expiry
+is **not** one of them).
 
 **Numbers from my runs** (three runs, RabbitMQ 4.2.9 on `:5672`, identical each time):
 

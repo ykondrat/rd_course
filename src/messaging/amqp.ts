@@ -21,9 +21,11 @@ export const RK = {
 
 export const QUORUM = { 'x-queue-type': 'quorum' } as const;
 
-export const WORK_QUEUE_ARGS = { ...QUORUM, 'x-dead-letter-exchange': X.dlx } as const;
-
 export const PREFETCH = 10;
+
+export const VHOST = '%2F';
+
+const DLX_POLICY = 'orders-order-placed-dlx';
 
 export function connect(): Promise<ChannelModel> {
   return amqp.connect(BROKER_URL);
@@ -60,31 +62,81 @@ export async function assertTopology(conn: ChannelModel): Promise<void> {
   await ch.assertExchange(X.dlx, 'fanout', { durable: true });
   await ch.assertQueue(Q.dlq, { durable: true, arguments: { ...QUORUM } });
   await ch.bindQueue(Q.dlq, X.dlx, '');
+  await ch.close().catch(() => {});
 
-  await assertWorkQueue(conn, ch);
+  await ensureWorkQueue(conn);
 
   const bindCh = await conn.createChannel();
   await bindCh.bindQueue(Q.orderPlaced, X.events, RK.orderPlaced);
   await bindCh.close().catch(() => {});
+
+  await setDlxPolicy();
+  await waitForDlxPolicy();
 }
 
-async function assertWorkQueue(conn: ChannelModel, ch: Channel): Promise<void> {
-  try {
-    await ch.assertQueue(Q.orderPlaced, { durable: true, arguments: { ...WORK_QUEUE_ARGS } });
-    await ch.close().catch(() => {});
-  } catch (err) {
-    if (!isPreconditionFailed(err)) throw err;
+async function ensureWorkQueue(conn: ChannelModel): Promise<void> {
+  if (await workQueueExists()) return;
 
-    const retry = await conn.createChannel();
+  const ch = await conn.createChannel();
 
-    await retry.deleteQueue(Q.orderPlaced);
-    await retry.assertQueue(Q.orderPlaced, { durable: true, arguments: { ...WORK_QUEUE_ARGS } });
-    await retry.close().catch(() => {});
+  await ch.assertQueue(Q.orderPlaced, { durable: true, arguments: { ...QUORUM } });
+  await ch.close().catch(() => {});
+}
+
+async function workQueueExists(): Promise<boolean> {
+  const res = await mgmt('GET', `/queues/${VHOST}/${encodeURIComponent(Q.orderPlaced)}`);
+
+  return res.ok;
+}
+
+function managementTarget(): { base: string; auth: string } {
+  const u = new URL(BROKER_URL);
+  const user = decodeURIComponent(u.username) || 'guest';
+  const pass = decodeURIComponent(u.password) || 'guest';
+
+  return {
+    base: `http://${u.hostname}:15672/api`,
+    auth: 'Basic ' + Buffer.from(`${user}:${pass}`).toString('base64'),
+  };
+}
+
+async function mgmt(method: 'GET' | 'PUT', path: string, payload?: unknown) {
+  const { base, auth } = managementTarget();
+
+  return fetch(`${base}${path}`, {
+    method,
+    headers: { authorization: auth, ...(payload ? { 'content-type': 'application/json' } : {}) },
+    body: payload ? JSON.stringify(payload) : undefined,
+  });
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+async function setDlxPolicy(): Promise<void> {
+  const res = await mgmt('PUT', `/policies/${VHOST}/${DLX_POLICY}`, {
+    pattern: `^${escapeRegExp(Q.orderPlaced)}$`,
+    'apply-to': 'queues',
+    priority: 1,
+    definition: { 'dead-letter-exchange': X.dlx },
+  });
+
+  if (!res.ok && res.status !== 204) {
+    throw new Error(`set DLX policy failed: ${res.status} ${await res.text()}`);
   }
 }
 
-function isPreconditionFailed(err: unknown): boolean {
-  return err instanceof Error && /PRECONDITION[-_ ]FAILED|406/i.test(err.message);
+async function waitForDlxPolicy(): Promise<void> {
+  await waitFor('DLX policy effective on the work queue', async () => {
+    const res = await mgmt('GET', `/queues/${VHOST}/${encodeURIComponent(Q.orderPlaced)}`);
+
+    if (!res.ok) return false;
+
+    const queue = (await res.json()) as { effective_policy_definition?: Record<string, unknown> };
+
+    return queue.effective_policy_definition?.['dead-letter-exchange'] === X.dlx;
+  });
 }
 
 export async function depth(ch: Channel, queue: string): Promise<number> {

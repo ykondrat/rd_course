@@ -46,14 +46,24 @@ export function effectStats(file: string): { total: number; unique: number; dups
   };
 }
 
-export function seen(file: string, eventId: string): boolean {
-  const path = statePath(file);
+export class ProcessedStore {
+  private readonly ids: Set<string>;
 
-  if (!existsSync(path)) return false;
+  constructor(private readonly file: string) {
+    const path = statePath(file);
+    const existing = existsSync(path) ? readFileSync(path, 'utf8').split('\n').filter(Boolean) : [];
 
-  return readFileSync(path, 'utf8').split('\n').includes(eventId);
-}
+    this.ids = new Set(existing);
+  }
 
-export function remember(file: string, eventId: string): void {
-  appendFileSync(statePath(file), `${eventId}\n`);
+  has(eventId: string): boolean {
+    return this.ids.has(eventId);
+  }
+
+  add(eventId: string): void {
+    if (this.ids.has(eventId)) return;
+
+    this.ids.add(eventId);
+    appendFileSync(statePath(this.file), `${eventId}\n`);
+  }
 }

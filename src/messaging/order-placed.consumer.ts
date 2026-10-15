@@ -1,7 +1,7 @@
 import type { Channel, ConsumeMessage } from 'amqplib';
 
 import { parse, Q } from './amqp';
-import { applyEffect, remember, seen } from './effects';
+import { applyEffect, ProcessedStore } from './effects';
 import type { OrderPlacedEvent } from './order-placed.event';
 
 export type Disposition = 'ack' | 'requeue' | 'reject';
@@ -37,12 +37,20 @@ export async function startConsumer(
 }
 
 async function dispatch(ch: Channel, handle: DeliveryHandler, msg: ConsumeMessage): Promise<void> {
-  const event = parse<OrderPlacedEvent>(msg.content);
-  const disposition = await handle(event, msg);
+  try {
+    const event = parse<OrderPlacedEvent>(msg.content);
+    const disposition = await handle(event, msg);
 
-  if (disposition === 'ack') ch.ack(msg);
-  else if (disposition === 'requeue') ch.nack(msg, false, true);
-  else ch.reject(msg, false);
+    if (disposition === 'ack') ch.ack(msg);
+    else if (disposition === 'requeue') ch.nack(msg, false, true);
+    else ch.reject(msg, false);
+  } catch (err) {
+    console.error(`order.placed handling failed → DLQ: ${err instanceof Error ? err.message : String(err)}`);
+
+    try {
+      ch.reject(msg, false);
+    } catch {}
+  }
 }
 
 export interface EffectOutcome {
@@ -53,10 +61,12 @@ export function idempotentEffect(
   effectsFile: string,
   processedFile: string,
 ): (event: OrderPlacedEvent) => EffectOutcome {
-  return (event) => {
-    if (seen(processedFile, event.eventId)) return { applied: false };
+  const processed = new ProcessedStore(processedFile);
 
-    remember(processedFile, event.eventId);
+  return (event) => {
+    if (processed.has(event.eventId)) return { applied: false };
+
+    processed.add(event.eventId);
     applyEffect(effectsFile, event.eventId, event.data);
 
     return { applied: true };
