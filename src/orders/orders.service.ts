@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import { createHash } from 'node:crypto';
 
 import { DatabaseService } from '../database/database.service';
@@ -7,8 +7,8 @@ import { buildPage, Page } from '../common/pagination';
 import { decodeCursor } from '../common/cursor';
 import { Keyset } from '../products/products.repository';
 import { OrderEventsService } from './order-events.service';
-import { OrderPlacedPublisher } from '../messaging/order-placed.publisher';
-import { buildOrderPlaced } from '../messaging/order-placed.event';
+import { OutboxRepository } from '../outbox/outbox.repository';
+import { toOrderPlacedEvent } from '../outbox/outbox.event';
 import { OrderItemRow, OrderRow, OrdersRepository } from './orders.repository';
 
 export interface OrderItem {
@@ -39,13 +39,11 @@ export interface CreateResult {
 
 @Injectable()
 export class OrdersService {
-  private readonly logger = new Logger(OrdersService.name);
-
   constructor(
     private readonly db: DatabaseService,
     private readonly orders: OrdersRepository,
     private readonly events: OrderEventsService,
-    private readonly orderPlaced: OrderPlacedPublisher,
+    private readonly outbox: OutboxRepository,
   ) {}
 
   async list(limit: number, cursor?: string): Promise<Page<Order>> {
@@ -90,11 +88,7 @@ export class OrdersService {
   }
 
   async create(key: string, body: CreateOrderBody): Promise<CreateResult> {
-    const result = await this.createInTransaction(key, body);
-
-    if (!result.replay) await this.publishOrderPlaced(result.order);
-
-    return result;
+    return this.createInTransaction(key, body);
   }
 
   private async createInTransaction(key: string, body: CreateOrderBody): Promise<CreateResult> {
@@ -189,31 +183,11 @@ export class OrdersService {
         computed.map(({ product_id, quantity, line_total_cents }) => ({ product_id, quantity, line_total_cents })),
       );
 
+      await this.outbox.insert(client, toOrderPlacedEvent(order));
       await this.orders.markKeyDone(client, key, order);
 
       return { order, replay: false };
     });
-  }
-
-  private async publishOrderPlaced(order: Order): Promise<void> {
-    const event = buildOrderPlaced(
-      {
-        orderId: order.id,
-        userId: order.user_id,
-        totalCents: order.total_cents,
-        currency: order.currency,
-        items: order.items.map((i) => ({ productId: i.product_id, quantity: i.quantity })),
-      },
-      order.created_at,
-    );
-
-    try {
-      await this.orderPlaced.publish(event);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-
-      this.logger.warn(`order.placed not published for order ${order.id}: ${message}`);
-    }
   }
 
   private async loadItemsMap(orderIds: number[]): Promise<Map<number, OrderItem[]>> {
