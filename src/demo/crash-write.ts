@@ -3,15 +3,16 @@ import 'reflect-metadata';
 import { createHash } from 'node:crypto';
 import type { ChannelModel } from 'amqplib';
 
-import { assertTopology, connect, depth, hdr, kv, note, Q } from './messaging/amqp';
-import { pool, transaction } from './lib/db';
-import { countOrders, resetWorld } from './outbox/demo-world';
-import { FulfillmentRepository } from './outbox/fulfillment.repository';
-import { toOrderPlacedEvent } from './outbox/outbox.event';
-import { OutboxRepository } from './outbox/outbox.repository';
-import { relayOnce } from './outbox/relay';
-import { OrdersRepository } from './orders/orders.repository';
-import type { Order } from './orders/orders.service';
+import { assertTopology, connect, depth, Q } from '../messaging/amqp';
+import { hdr, kv, note } from './helpers/output';
+import { pool, transaction } from '../lib/db';
+import { countOrders, resetWorld } from '../outbox/demo-world';
+import { FulfillmentRepository } from '../outbox/fulfillment.repository';
+import { toOrderPlacedEvent } from '../outbox/outbox.event';
+import { OutboxRepository } from '../outbox/outbox.repository';
+import { relayOnce } from '../outbox/relay';
+import { OrdersRepository } from '../orders/orders.repository';
+import type { Order } from '../orders/orders.service';
 
 const ordersRepo = new OrdersRepository();
 const outboxRepo = new OutboxRepository();

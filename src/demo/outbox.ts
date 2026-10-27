@@ -2,15 +2,16 @@ import 'reflect-metadata';
 
 import type { ChannelModel } from 'amqplib';
 
-import { assertTopology, connect, hdr, kv, note, Q, waitFor } from './messaging/amqp';
-import { pool, transaction } from './lib/db';
-import { CONSUMER, startFulfillmentConsumer } from './outbox/consumer';
-import { countOrders, resetWorld } from './outbox/demo-world';
-import { FulfillmentRepository } from './outbox/fulfillment.repository';
-import { OutboxRepository } from './outbox/outbox.repository';
-import { placeOrder, PlaceOrderInput } from './outbox/place-order';
-import { ProcessedMessagesRepository } from './outbox/processed-messages.repository';
-import { relayOnce } from './outbox/relay';
+import { assertTopology, connect, Q, waitFor } from '../messaging/amqp';
+import { hdr, kv, note } from './helpers/output';
+import { pool, transaction } from '../lib/db';
+import { CONSUMER, startFulfillmentConsumer } from '../outbox/consumer';
+import { countOrders, resetWorld } from '../outbox/demo-world';
+import { FulfillmentRepository } from '../outbox/fulfillment.repository';
+import { OutboxRepository } from '../outbox/outbox.repository';
+import { placeOrder, PlaceOrderInput } from '../outbox/place-order';
+import { ProcessedMessagesRepository } from '../outbox/processed-messages.repository';
+import { relayOnce } from '../outbox/relay';
 
 const outboxRepo = new OutboxRepository();
 const processedRepo = new ProcessedMessagesRepository();
