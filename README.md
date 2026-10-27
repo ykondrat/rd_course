@@ -189,6 +189,55 @@ grep -rniE --include='*.ts' --exclude-dir=node_modules --exclude-dir=dist "prefe
 node -e "const s=require('./package.json').scripts;const bad=['demo:publish','demo:dlq','demo:duplicate'].filter(k=>/with-secrets\.sh/.test(s[k]||'')===false);console.log(bad.length===0?'OK':'missing wrapper: '+bad.join(', '));process.exit(bad.length===0?0:1)"
 ```
 
+### Outbox & idempotency
+
+These three demos touch both the database and the broker, so both are needed (`postgres` +
+`rabbit`). `--wait` is non-negotiable (Postgres must accept connections; the RabbitMQ Erlang
+node accepts `basic.publish` only after it is healthy). The demos are self-cleaning
+(`TRUNCATE ... RESTART IDENTITY CASCADE`), so they run as `admin`, just like `migrate`/`seed`.
+`BROKER_URL` uses scheme `amqp` and port **5672** (not 15672, which is the management UI).
+
+```bash
+docker compose up -d --wait postgres rabbit
+
+export PGHOST=127.0.0.1 PGPORT=5432 PGUSER=admin PGPASSWORD=admin-bootstrap-only PGDATABASE=appdb
+export DATABASE_URL=postgres://admin:admin-bootstrap-only@127.0.0.1:5432/appdb
+export BROKER_URL=amqp://app:app@127.0.0.1:5672
+export SKIP_VAULT=1
+
+npm ci
+npx tsc --noEmit          # clean compile
+npm run build             # tsc → dist/
+npm run migrate           # creates outbox, processed_messages, order_fulfillments
+
+# (2) happy path + Idempotency-Key at the API edge
+npm run demo:outbox | tee /tmp/o.txt; echo "exit=${PIPESTATUS[0]}"
+for k in requests=2 orders=1 outbox=1 published=1 effect=1 processed=1; do
+  grep -qx "$k" /tmp/o.txt || echo "MISSING: $k"
+done
+
+# (3) a failed business write never lets the event escape
+npm run demo:crash-write | tee /tmp/w.txt; echo "exit=${PIPESTATUS[0]}"
+for k in write-failed=1 orders=0 outbox=0 published=0 deliveries=0 effect=0; do
+  grep -qx "$k" /tmp/w.txt || echo "MISSING: $k"
+done
+
+# (4) ⭐ the event is published twice after a failed bookkeeping write; the effect stays one
+npm run demo:crash-relay | tee /tmp/c.txt; echo "exit=${PIPESTATUS[0]}"
+awk -F= '/^deliveries=/{ok=($2>=2)} END{exit !ok}' /tmp/c.txt && echo "deliveries>=2 OK"
+for k in applied=1 effect=1 processed=1; do
+  grep -qx "$k" /tmp/c.txt || echo "MISSING: $k"
+done
+```
+
+Static checks — no DB or broker needed:
+
+```bash
+grep -rniE --include='*.ts' --exclude-dir=node_modules --exclude-dir=dist "skip[ _-]*locked" .
+grep -rniE --include='*.ts' --exclude-dir=node_modules --exclude-dir=dist "on[ _]*conflict|do[ _]+nothing|or[ _]*ignore|skip[ _]*duplicates|ignore[ _]*duplicates|23505|P2002" .
+node -e "const s=require('./package.json').scripts;const bad=['demo:outbox','demo:crash-write','demo:crash-relay'].filter(k=>/with-secrets\.sh/.test(s[k]||'')===false);console.log(bad.length===0?'OK':'missing wrapper: '+bad.join(', '));process.exit(bad.length===0?0:1)"
+```
+
 ## Concurrency
 
 The checkout — decrement `stock`, debit the buyer's `balance_cents`, insert the `order` + its `order_item`, and enqueue a post-processing `task` — runs in one transaction.
@@ -511,6 +560,46 @@ would not), which is all this step needs; the transactional version is L#22.
 `:15672` where a dead-lettered message's `x-death` headers are inspectable. Queues are
 **quorum** (`x-queue-type: quorum`), the 2026 default; classic mirroring (`ha-mode`) was
 removed in 4.0, so it is not proposed.
+
+## Outbox & idempotency
+
+The order `COMMIT` and the `publish` used to be two writes with no shared transaction — a crash
+between them loses the event.
+
+- **One COMMIT.** `OrdersService.create()` inserts the `order.placed` row into an `outbox` table
+  *in the same transaction* as the order; the after-`COMMIT` publish is gone. The payload is a
+  shaped event (`toOrderPlacedEvent`), not the ORM row. Columns match the Debezium Outbox Event
+  Router roles, so a later move to CDC needs no consumer changes.
+- **Relay.** `relayOnce()`: `SELECT … WHERE published_at IS NULL … FOR UPDATE SKIP LOCKED` →
+  `publish` → `UPDATE published_at`, in that order. `SKIP LOCKED` lets competing relays take free
+  rows; a partial index `WHERE published_at IS NULL` keeps the scan on the unpublished tail.
+- **Idempotency, three levels.** (1) API edge — the HW-9 `Idempotency-Key` (identifies the
+  intent); (2) inbox `processed_messages (message_id, consumer)` — the processed mark and the
+  effect share one transaction; (3) natural key — `INSERT INTO order_fulfillments … ON CONFLICT
+  DO NOTHING`, a state, not `qty = qty - 1`.
+
+### Numbers from my runs (Postgres 17 + RabbitMQ 4.2, identical each run)
+
+| Demo                       | Output (`key=value`)                                                         |
+|----------------------------|------------------------------------------------------------------------------|
+| `npm run demo:outbox`      | `requests=2 orders=1 outbox=1 published=1 deliveries=1 effect=1 processed=1` |
+| `npm run demo:crash-write` | `write-failed=1 orders=0 outbox=0 published=0 deliveries=0 effect=0`         |
+| `npm run demo:crash-relay` | `published=1 deliveries=2 applied=1 effect=1 processed=1`                    |
+
+`demo:crash-write` throws *after* the outbox insert — order and outbox row roll back together,
+proving one `COMMIT`. `demo:crash-relay` dies between `publish` and `UPDATE published_at`
+(simulated exception → `ROLLBACK` at that point; deterministic, unlike a real `kill -9`), so the
+event is published twice but the inbox dedup applies the effect once.
+
+**Why `publish` must come before `UPDATE published_at`.** Marking published first would turn a
+failed publish into a **lost** event. The real choice is duplicate vs loss — a duplicate is cured
+by deduplication, a loss is cured by nothing — so publish goes first and the possible duplicate is
+absorbed by the idempotent consumer. (A publish error doesn't even prove non-delivery — the
+broker's ack may be what was lost — so consumer-side dedup is mandatory regardless.)
+
+**Cleanup.** The `outbox` table only grows; a periodic job deletes already-published rows past a
+short window (`DELETE FROM outbox WHERE published_at < now() - interval '7 days'`) to keep the
+partial index small, and trims `processed_messages` by `processed_at` the same way.
 
 ## Testing — integration, E2E, contract
 

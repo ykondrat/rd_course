@@ -6,6 +6,7 @@ import { User, Product, Order, OrderItem, IdempotencyKey, Task } from '../../../
 import { InitialSchema1789970515364 } from '../../../src/migrations/1789970515364-InitialSchema';
 import { AddProductSkuUnique1790083904530 } from '../../../src/migrations/1790083904530-AddProductSkuUnique';
 import { AddConcurrencyStockBalanceTasks1790084975962 } from '../../../src/migrations/1790084975962-AddConcurrencyStockBalanceTasks';
+import { AddOutboxAndIdempotentConsumer1792500000000 } from '../../../src/migrations/1792500000000-AddOutboxAndIdempotentConsumer';
 
 export interface DbConnection {
   host: string;
@@ -28,6 +29,7 @@ export async function applyMigrations(conn: DbConnection): Promise<void> {
       InitialSchema1789970515364,
       AddProductSkuUnique1790083904530,
       AddConcurrencyStockBalanceTasks1790084975962,
+      AddOutboxAndIdempotentConsumer1792500000000,
     ],
     synchronize: false,
   });
