@@ -26,25 +26,34 @@ export async function relayOnce(opts: RelayOptions = {}): Promise<number> {
       return 0;
     }
 
-    await withConfirmChannel(async (ch) => {
-      for (const row of rows) {
-        const event = row.payload;
+    const ids = rows.map((row) => row.id);
 
-        ch.publish(X.events, RK.orderPlaced, body(event), {
-          persistent: true,
-          messageId: event.eventId,
-          contentType: 'application/json',
-        });
-      }
+    try {
+      await withConfirmChannel(async (ch) => {
+        for (const row of rows) {
+          const event = row.payload;
 
-      await ch.waitForConfirms();
-    });
+          ch.publish(X.events, RK.orderPlaced, body(event), {
+            persistent: true,
+            messageId: event.eventId,
+            contentType: 'application/json',
+          });
+        }
+
+        await ch.waitForConfirms();
+      });
+    } catch (publishError) {
+      await client.query('ROLLBACK').catch(() => undefined);
+      await outboxRepo.recordAttempt(pool, ids);
+
+      throw publishError;
+    }
 
     if (opts.abortBeforeUpdate) {
       throw new Error('relay died between publish and UPDATE published_at');
     }
 
-    await outboxRepo.markPublished(client, rows.map((row) => row.id));
+    await outboxRepo.markPublished(client, ids);
     await client.query('COMMIT');
 
     return rows.length;

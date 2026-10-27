@@ -14,6 +14,7 @@ export const EnvSchema = z.object({
   PGADMIN_PASSWORD: z.string().min(1).optional(),
   OPENAPI_SPEC: z.string().min(1).default('openapi/openapi.yaml'),
   BROKER_URL: z.string().min(1).default('amqp://app:app@127.0.0.1:5672'),
+  RABBITMQ_MGMT_PORT: z.coerce.number().int().positive().default(15672),
   REDIS_URL: z.string().min(1).default('redis://127.0.0.1:6391'),
   REDIS_QUEUE_URL: z.string().min(1).default('redis://127.0.0.1:6392'),
 });
@@ -40,9 +41,14 @@ export function loadEnv(source: NodeJS.ProcessEnv = process.env): Env {
   return validate(source);
 }
 
-export const BrokerEnvSchema = z.object({ BROKER_URL: EnvSchema.shape.BROKER_URL });
+export const BrokerEnvSchema = z.object({
+  BROKER_URL: EnvSchema.shape.BROKER_URL,
+  RABBITMQ_MGMT_PORT: EnvSchema.shape.RABBITMQ_MGMT_PORT,
+});
 
-export function loadBrokerEnv(source: NodeJS.ProcessEnv = process.env): { BROKER_URL: string } {
+export function loadBrokerEnv(
+  source: NodeJS.ProcessEnv = process.env,
+): { BROKER_URL: string; RABBITMQ_MGMT_PORT: number } {
   return BrokerEnvSchema.parse(source);
 }
 

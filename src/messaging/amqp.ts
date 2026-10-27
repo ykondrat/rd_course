@@ -3,7 +3,11 @@ import type { Channel, ChannelModel, ConfirmChannel } from 'amqplib';
 
 import { loadBrokerEnv } from '../config/env.schema';
 
-export const BROKER_URL = loadBrokerEnv().BROKER_URL;
+const brokerEnv = loadBrokerEnv();
+
+export const BROKER_URL = brokerEnv.BROKER_URL;
+
+const MANAGEMENT_PORT = brokerEnv.RABBITMQ_MGMT_PORT;
 
 export const X = {
   events: 'shop.events',
@@ -95,7 +99,7 @@ function managementTarget(): { base: string; auth: string } {
   const pass = decodeURIComponent(u.password) || 'guest';
 
   return {
-    base: `http://${u.hostname}:15672/api`,
+    base: `http://${u.hostname}:${MANAGEMENT_PORT}/api`,
     auth: 'Basic ' + Buffer.from(`${user}:${pass}`).toString('base64'),
   };
 }
