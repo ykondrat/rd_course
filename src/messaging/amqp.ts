@@ -170,7 +170,3 @@ function startDeadline(timeoutMs: number): () => boolean {
 
   return () => Date.now() - t0 > timeoutMs;
 }
-
-export const kv = (key: string, value: string | number): void => console.log(`${key}=${value}`);
-export const note = (s: string): void => console.log(`   ${s}`);
-export const hdr = (s: string): void => console.log(`\n── ${s}`);

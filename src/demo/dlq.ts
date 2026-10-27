@@ -1,10 +1,11 @@
 import type { ChannelModel } from 'amqplib';
 
-import { assertTopology, connect, depth, hdr, kv, note, Q, waitFor } from './messaging/amqp';
-import { effectStats, resetState } from './messaging/effects';
-import { startConsumer } from './messaging/order-placed.consumer';
-import { buildOrderPlaced } from './messaging/order-placed.event';
-import { publishOrderPlacedEvents } from './messaging/order-placed.publisher';
+import { assertTopology, connect, depth, Q, waitFor } from '../messaging/amqp';
+import { hdr, kv, note } from './helpers/output';
+import { effectStats, resetState } from '../messaging/effects';
+import { startConsumer } from '../messaging/order-placed.consumer';
+import { buildOrderPlaced } from '../messaging/order-placed.event';
+import { publishOrderPlacedEvents } from '../messaging/order-placed.publisher';
 
 const EFFECTS = 'dlq.effects.jsonl';
 const DEAD_LETTER_REASONS = ['rejected', 'expired', 'maxlen', 'delivery_limit'];

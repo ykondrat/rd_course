@@ -448,6 +448,16 @@ components:
         created_at:
           type: string
           format: date-time
+        stock:
+          type: integer
+          description: units in stock (present on the cached product card).
+        rating_avg:
+          type: number
+          nullable: true
+          description: average review rating, null when there are no reviews.
+        review_count:
+          type: integer
+          description: number of reviews.
       example:
         id: 1
         title: Mechanical Keyboard
@@ -456,6 +466,9 @@ components:
         sku: KB-001
         description: Mechanical keyboard with Brown switches
         created_at: '2026-08-20T10:00:00Z'
+        stock: 42
+        rating_avg: 4.5
+        review_count: 12
     ProductCreate:
       type: object
       additionalProperties: false
