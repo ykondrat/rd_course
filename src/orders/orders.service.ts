@@ -1,5 +1,4 @@
 import { Injectable } from '@nestjs/common';
-import { createHash } from 'node:crypto';
 
 import { DatabaseService } from '../database/database.service';
 import { AppError } from '../common/problem';
@@ -7,8 +6,7 @@ import { buildPage, Page } from '../common/pagination';
 import { decodeCursor } from '../common/cursor';
 import { Keyset } from '../products/products.repository';
 import { OrderEventsService } from './order-events.service';
-import { OutboxRepository } from '../outbox/outbox.repository';
-import { toOrderPlacedEvent } from '../outbox/outbox.event';
+import { fingerprintOf, resolveIdempotency, writeOrderWithOutbox } from '../outbox/order-write';
 import { OrderItemRow, OrderRow, OrdersRepository } from './orders.repository';
 
 export interface OrderItem {
@@ -43,7 +41,6 @@ export class OrdersService {
     private readonly db: DatabaseService,
     private readonly orders: OrdersRepository,
     private readonly events: OrderEventsService,
-    private readonly outbox: OutboxRepository,
   ) {}
 
   async list(limit: number, cursor?: string): Promise<Page<Order>> {
@@ -92,27 +89,12 @@ export class OrdersService {
   }
 
   private async createInTransaction(key: string, body: CreateOrderBody): Promise<CreateResult> {
-    const fingerprint = createHash('sha256').update(JSON.stringify(body)).digest('hex');
+    const fingerprint = fingerprintOf(body);
 
     return this.db.withTransaction(async (client) => {
-      const claimed = await this.orders.claimIdempotencyKey(client, key, fingerprint);
+      const outcome = await resolveIdempotency(client, key, fingerprint);
 
-      if (!claimed) {
-        const rec = await this.orders.findIdempotencyKey(client, key);
-
-        if (rec && rec.fingerprint !== fingerprint) {
-          throw new AppError(422, 'This Idempotency-Key was already used with a different request body.', {
-            code: 'idempotency-key-reuse',
-          });
-        }
-        if (rec && rec.state === 'in-flight') {
-          throw new AppError(409, 'A request with this Idempotency-Key is still being processed — retry later.', {
-            code: 'idempotency-in-flight',
-          });
-        }
-
-        return { order: rec!.response as Order, replay: true };
-      }
+      if (outcome.replay) return { order: outcome.order, replay: true };
 
       if (!(await this.orders.userExists(client, body.user_id))) {
         throw new AppError(422, `Unknown user id: ${body.user_id}.`, {
@@ -153,38 +135,22 @@ export class OrdersService {
 
       const currency = [...byId.values()][0].currency;
 
-      let total = 0;
       const computed = body.items.map((i) => {
         const product = byId.get(i.product_id)!;
-        const line = product.price_cents * i.quantity;
-
-        total += line;
 
         return {
           product_id: i.product_id,
           quantity: i.quantity,
           unit_price_cents: product.price_cents,
-          line_total_cents: line,
+          line_total_cents: product.price_cents * i.quantity,
         };
       });
 
-      const orderRow = await this.orders.insertOrder(client, {
-        user_id: body.user_id,
+      const order = await writeOrderWithOutbox(client, key, {
+        userId: body.user_id,
         currency,
-        total_cents: total,
+        items: computed,
       });
-
-      for (const item of computed) {
-        await this.orders.insertOrderItem(client, { order_id: orderRow.id, ...item });
-      }
-
-      const order: Order = this.assemble(
-        orderRow,
-        computed.map(({ product_id, quantity, line_total_cents }) => ({ product_id, quantity, line_total_cents })),
-      );
-
-      await this.outbox.insert(client, toOrderPlacedEvent(order));
-      await this.orders.markKeyDone(client, key, order);
 
       return { order, replay: false };
     });

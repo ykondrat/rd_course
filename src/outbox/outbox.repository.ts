@@ -9,6 +9,8 @@ export interface OutboxRow {
   payload: OrderPlacedEvent;
 }
 
+export const MAX_ATTEMPTS = 5;
+
 @Injectable()
 export class OutboxRepository {
   async insert(db: Queryable, event: OrderPlacedEvent): Promise<void> {
@@ -19,15 +21,19 @@ export class OutboxRepository {
     );
   }
 
-  async claimUnpublished(db: Queryable, limit: number): Promise<OutboxRow[]> {
+  async claimUnpublished(
+    db: Queryable,
+    limit: number,
+    maxAttempts: number = MAX_ATTEMPTS,
+  ): Promise<OutboxRow[]> {
     const { rows } = await db.query(
       `SELECT id, type, payload
          FROM outbox
-        WHERE published_at IS NULL
+        WHERE published_at IS NULL AND attempts < $2
         ORDER BY created_at, id
         LIMIT $1
         FOR UPDATE SKIP LOCKED`,
-      [limit],
+      [limit, maxAttempts],
     );
 
     return rows as OutboxRow[];
@@ -41,6 +47,12 @@ export class OutboxRepository {
         WHERE id = ANY($1::uuid[])`,
       [ids],
     );
+  }
+
+  async recordAttempt(db: Queryable, ids: string[]): Promise<void> {
+    if (ids.length === 0) return;
+
+    await db.query(`UPDATE outbox SET attempts = attempts + 1 WHERE id = ANY($1::uuid[])`, [ids]);
   }
 
   async countAll(db: Queryable): Promise<number> {
