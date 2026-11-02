@@ -8,19 +8,18 @@ const LIMIT = 5;
 const WINDOW_MS = 1000;
 const REQUESTS = 10;
 
-const redis = createQueueRedis();
+const connections = [createQueueRedis(), createQueueRedis()];
 
 async function main(): Promise<number> {
+  const [redis] = connections;
   const keys = await redis.keys('rl:*');
 
   if (keys.length > 0) await redis.del(...keys);
 
   const key = 'client-42';
-  const pods = [
-    new SlidingWindowLimiter(redis, { limit: LIMIT, windowMs: WINDOW_MS }),
-    new SlidingWindowLimiter(redis, { limit: LIMIT, windowMs: WINDOW_MS }),
-  ];
-  const instances = pods.length;
+  const pods = connections.map((conn) => new SlidingWindowLimiter(conn, { limit: LIMIT, windowMs: WINDOW_MS }));
+  const clientIds = await Promise.all(connections.map((conn) => conn.call('CLIENT', 'ID')));
+  const instances = new Set(clientIds).size;
 
   let allowed = 0;
   let blocked = 0;
@@ -59,13 +58,17 @@ async function main(): Promise<number> {
   return ok ? 0 : 1;
 }
 
+async function closeAll(): Promise<void> {
+  await Promise.all(connections.map((conn) => conn.quit().catch(() => {})));
+}
+
 main()
   .then(async (code) => {
-    await redis.quit().catch(() => {});
+    await closeAll();
     process.exit(code);
   })
   .catch(async (err) => {
     console.error(err instanceof Error ? err.message : err);
-    await redis.quit().catch(() => {});
+    await closeAll();
     process.exit(1);
   });
