@@ -4,6 +4,8 @@ import { DatabaseService } from '../database/database.service';
 import { AppError } from '../common/problem';
 import { buildPage, Page } from '../common/pagination';
 import { decodeCursor } from '../common/cursor';
+import { ProductCacheService } from '../redis/product-cache.service';
+import { ProductCard } from '../redis/product-projection';
 import { Keyset, ProductRow, ProductsRepository, UpdateField } from './products.repository';
 
 export interface Product {
@@ -14,6 +16,9 @@ export interface Product {
   sku: string;
   description?: string;
   created_at: string;
+  stock?: number;
+  rating_avg?: number | null;
+  review_count?: number;
 }
 
 @Injectable()
@@ -21,6 +26,7 @@ export class ProductsService {
   constructor(
     private readonly db: DatabaseService,
     private readonly products: ProductsRepository,
+    private readonly cache: ProductCacheService,
   ) {}
 
   async list(limit: number, cursor?: string): Promise<Page<Product>> {
@@ -31,11 +37,11 @@ export class ProductsService {
   }
 
   async getById(id: number): Promise<Product> {
-    const row = await this.products.findById(this.db, id);
+    const card = await this.cache.getProductCard(id);
 
-    if (!row) throw new AppError(404, `Product ${id} not found`);
+    if (!card) throw new AppError(404, `Product ${id} not found`);
 
-    return this.serialize(row);
+    return this.serializeCard(card);
   }
 
   async create(dto: {
@@ -82,6 +88,24 @@ export class ProductsService {
     };
 
     if (row.description != null) product.description = row.description;
+
+    return product;
+  }
+
+  private serializeCard(card: ProductCard): Product {
+    const product: Product = {
+      id: card.id,
+      title: card.title,
+      price_cents: card.price_cents,
+      currency: card.currency,
+      sku: card.sku,
+      created_at: card.created_at,
+      stock: card.stock,
+      rating_avg: card.rating_avg,
+      review_count: card.review_count,
+    };
+
+    if (card.description != null) product.description = card.description;
 
     return product;
   }

@@ -1,4 +1,5 @@
-import { log, note, pool, section, sleep, transaction } from './lib/db';
+import { pool, transaction } from '../lib/db';
+import { log, note, section, sleep } from './helpers/output';
 
 const TASK_COUNT = 24;
 const WORKER_COUNT = 4;

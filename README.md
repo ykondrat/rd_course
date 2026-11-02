@@ -238,6 +238,57 @@ grep -rniE --include='*.ts' --exclude-dir=node_modules --exclude-dir=dist "on[ _
 node -e "const s=require('./package.json').scripts;const bad=['demo:outbox','demo:crash-write','demo:crash-relay'].filter(k=>/with-secrets\.sh/.test(s[k]||'')===false);console.log(bad.length===0?'OK':'missing wrapper: '+bad.join(', '));process.exit(bad.length===0?0:1)"
 ```
 
+### Redis — cache, sessions, rate-limit, queue
+
+Two Redis instances (`redis-cache` on 6391 = `allkeys-lru`; `redis-queue` on 6392 = `noeviction`). `--wait` gates on `redis-cli ping`. Demos self-clean, so they run as `admin` like `migrate`/`seed`.
+
+```bash
+docker compose up -d --wait
+
+export PGHOST=127.0.0.1 PGPORT=5432 PGUSER=admin PGPASSWORD=admin-bootstrap-only PGDATABASE=appdb
+export DATABASE_URL=postgres://admin:admin-bootstrap-only@127.0.0.1:5432/appdb
+export REDIS_URL=redis://127.0.0.1:6391          # cache instance
+export REDIS_QUEUE_URL=redis://127.0.0.1:6392    # queue / sessions / rate-limit instance
+export SKIP_VAULT=1
+
+npm ci
+npx tsc --noEmit
+npm run build
+npm run migrate
+
+# (2) cache saves DB calls; a stampede yields exactly one
+npm run demo:cache | tee /tmp/c.txt; echo "exit=${PIPESTATUS[0]}"
+for k in db-calls=1 db-calls-warm=0 cache-lru=1 cache-maxmemory=1; do grep -qx "$k" /tmp/c.txt || echo "MISSING: $k"; done
+awk -F= '/^concurrent=/{ok=($2>=20)} END{exit !ok}' /tmp/c.txt && echo "concurrent>=20 OK"
+awk -F= '/^warmed=/{ok=($2>=50)}      END{exit !ok}' /tmp/c.txt && echo "warmed>=50 OK"
+awk -F= '/^ttl-distinct=/{ok=($2>=5)} END{exit !ok}' /tmp/c.txt && echo "ttl-distinct>=5 OK"
+
+# (3) session lives in Redis and renews on activity
+npm run demo:session | tee /tmp/s.txt; echo "exit=${PIPESTATUS[0]}"
+for k in sessions=1 in-redis=1 ttl-renewed=1; do grep -qx "$k" /tmp/s.txt || echo "MISSING: $k"; done
+awk -F= '/^requests=/{ok=($2>=3)} END{exit !ok}' /tmp/s.txt && echo "requests>=3 OK"
+
+# (4) limit shared across two pods; 429 + Retry-After
+npm run demo:ratelimit | tee /tmp/r.txt; echo "exit=${PIPESTATUS[0]}"
+for k in status=429 retry-after=1; do grep -qx "$k" /tmp/r.txt || echo "MISSING: $k"; done
+awk -F= '/^instances=/{i=$2} /^limit=/{l=$2} /^allowed=/{a=$2} /^blocked=/{b=$2} END{exit !(i>=2 && l>0 && a==l && b>=1)}' /tmp/r.txt && echo "instances/allowed/blocked OK"
+
+# (5) queue retries, deduplicates, and has a scheduler
+npm run demo:queue | tee /tmp/q.txt; echo "exit=${PIPESTATUS[0]}"
+for k in completed=1 added=2 queued=1 queue-noeviction=1; do grep -qx "$k" /tmp/q.txt || echo "MISSING: $k"; done
+awk -F= '/^attempts=/{ok=($2>=3)} END{exit !ok}' /tmp/q.txt && echo "attempts>=3 OK"
+awk -F= '/^schedulers=/{ok=($2>=1)} END{exit !ok}' /tmp/q.txt && echo "schedulers>=1 OK"
+awk -F= '/^scheduled-runs=/{ok=($2>=2)} END{exit !ok}' /tmp/q.txt && echo "scheduled-runs>=2 OK"
+```
+
+Static checks — no Redis needed. (6) proves cache and queue are on different instances by cross-reading the two outputs; one instance cannot report both.
+
+```bash
+grep -qx 'cache-lru=1' /tmp/c.txt && grep -qx 'queue-noeviction=1' /tmp/q.txt && echo "two instances OK" || echo "same instance"
+grep -rniE --exclude-dir=node_modules --exclude-dir=dist "maxmemory[ _-]*policy|noeviction|allkeys[ _-]*lru" .
+node -e "const s=require('./package.json').scripts;const bad=['demo:cache','demo:session','demo:ratelimit','demo:queue'].filter(k=>/with-secrets\.sh/.test(s[k]||'')===false);console.log(bad.length===0?'OK':'missing wrapper: '+bad.join(', '));process.exit(bad.length===0?0:1)"
+```
+
 ## Concurrency
 
 The checkout — decrement `stock`, debit the buyer's `balance_cents`, insert the `order` + its `order_item`, and enqueue a post-processing `task` — runs in one transaction.
@@ -600,6 +651,21 @@ broker's ack may be what was lost — so consumer-side dedup is mandatory regard
 **Cleanup.** The `outbox` table only grows; a periodic job deletes already-published rows past a
 short window (`DELETE FROM outbox WHERE published_at < now() - interval '7 days'`) to keep the
 partial index small, and trims `processed_messages` by `processed_at` the same way.
+
+## Redis — cache, sessions, rate-limit, queue
+
+Redis sits over the system to make it fast, not correct (`src/redis/*`), with cache-aside (jittered TTL + single-flight lock) wired into the live `GET /products/:id`. 
+Two instances are mandatory because the cache needs `allkeys-lru` while BullMQ needs `noeviction` — incompatible in one process — so `redis-cache` (6391) holds the cache and `redis-queue` (6392, `noeviction` + AOF) holds the queue, sessions, and rate-limit counters (sessions must never sit in the LRU instance). 
+The stampede lock is only an optimization: if it breaks, you get two identical `SELECT`s — a duplicate, not a corrupted invariant — which is exactly why a business invariant is never guarded by `SET NX` (that needs a transaction / unique index / fencing token).
+
+### Numbers from my runs
+
+| Demo                     | Output (`key=value`)                                                                               |
+|--------------------------|----------------------------------------------------------------------------------------------------|
+| `npm run demo:cache`     | `cache-lru=1 cache-maxmemory=1 warmed=60 ttl-distinct≈40 concurrent=25 db-calls=1 db-calls-warm=0` |
+| `npm run demo:session`   | `requests=3 sessions=1 in-redis=1 ttl-renewed=1`                                                   |
+| `npm run demo:ratelimit` | `instances=2 limit=5 requests=10 allowed=5 blocked=5 status=429 retry-after=1`                     |
+| `npm run demo:queue`     | `queue-noeviction=1 attempts=3 completed=1 added=2 queued=1 schedulers=1 scheduled-runs=2`         |
 
 ## Testing — integration, E2E, contract
 

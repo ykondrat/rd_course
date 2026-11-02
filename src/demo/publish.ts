@@ -1,20 +1,11 @@
 import type { ChannelModel } from 'amqplib';
 
-import {
-  assertTopology,
-  connect,
-  depth,
-  hdr,
-  kv,
-  note,
-  PREFETCH,
-  Q,
-  waitFor,
-} from './messaging/amqp';
-import { effectStats, resetState } from './messaging/effects';
-import { idempotentEffect, startConsumer } from './messaging/order-placed.consumer';
-import { buildOrderPlaced, type OrderPlacedEvent } from './messaging/order-placed.event';
-import { publishOrderPlacedEvents } from './messaging/order-placed.publisher';
+import { assertTopology, connect, depth, PREFETCH, Q, waitFor } from '../messaging/amqp';
+import { hdr, kv, note } from './helpers/output';
+import { effectStats, resetState } from '../messaging/effects';
+import { idempotentEffect, startConsumer } from '../messaging/order-placed.consumer';
+import { buildOrderPlaced, type OrderPlacedEvent } from '../messaging/order-placed.event';
+import { publishOrderPlacedEvents } from '../messaging/order-placed.publisher';
 
 const N = 5;
 const EFFECTS = 'publish.effects.jsonl';

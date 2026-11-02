@@ -15,6 +15,8 @@ export const EnvSchema = z.object({
   OPENAPI_SPEC: z.string().min(1).default('openapi/openapi.yaml'),
   BROKER_URL: z.string().min(1).default('amqp://app:app@127.0.0.1:5672'),
   RABBITMQ_MGMT_PORT: z.coerce.number().int().positive().default(15672),
+  REDIS_URL: z.string().min(1).default('redis://127.0.0.1:6391'),
+  REDIS_QUEUE_URL: z.string().min(1).default('redis://127.0.0.1:6392'),
 });
 
 export type Env = z.infer<typeof EnvSchema>;
@@ -48,4 +50,15 @@ export function loadBrokerEnv(
   source: NodeJS.ProcessEnv = process.env,
 ): { BROKER_URL: string; RABBITMQ_MGMT_PORT: number } {
   return BrokerEnvSchema.parse(source);
+}
+
+export const RedisEnvSchema = z.object({
+  REDIS_URL: EnvSchema.shape.REDIS_URL,
+  REDIS_QUEUE_URL: EnvSchema.shape.REDIS_QUEUE_URL,
+});
+
+export function loadRedisEnv(
+  source: NodeJS.ProcessEnv = process.env,
+): { REDIS_URL: string; REDIS_QUEUE_URL: string } {
+  return RedisEnvSchema.parse(source);
 }

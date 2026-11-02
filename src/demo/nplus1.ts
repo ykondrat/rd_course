@@ -7,8 +7,8 @@ import {
   LogMessage,
 } from 'typeorm';
 
-import { dataSourceOptions } from './data-source';
-import { Order, OrderItem, Product } from './entities';
+import { dataSourceOptions } from '../data-source';
+import { Order, OrderItem, Product } from '../entities';
 
 class QueryCountLogger extends AbstractLogger {
   count = 0;

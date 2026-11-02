@@ -1,6 +1,7 @@
 import { PoolClient } from 'pg';
 
-import { log, note, pool, section, withRetry } from './lib/db';
+import { pool, withRetry } from '../lib/db';
+import { log, note, section } from './helpers/output';
 
 const CONCURRENCY = 10;
 const STEP_CENTS = 100;

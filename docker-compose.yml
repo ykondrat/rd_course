@@ -13,12 +13,18 @@ services:
       PGDATABASE: appdb
       PG_POOL_MAX: 10
       OPENAPI_SPEC: openapi/openapi.yaml
+      REDIS_URL: redis://redis-cache:6379
+      REDIS_QUEUE_URL: redis://redis-queue:6379
     volumes:
       - ./secrets:/app/secrets:ro
     ports:
       - "3000:3000"
     depends_on:
       pgbouncer:
+        condition: service_healthy
+      redis-cache:
+        condition: service_healthy
+      redis-queue:
         condition: service_healthy
     restart: unless-stopped
 
@@ -121,6 +127,35 @@ services:
       timeout: 3s
       retries: 30
 
+  redis-cache:
+    image: redis:7-alpine
+    command: ["redis-server", "--maxmemory", "64mb", "--maxmemory-policy", "allkeys-lru"]
+    ports:
+      - "6391:6379"
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 3s
+      timeout: 2s
+      retries: 10
+      start_period: 3s
+    restart: unless-stopped
+
+  redis-queue:
+    image: redis:7-alpine
+    command: ["redis-server", "--maxmemory-policy", "noeviction", "--appendonly", "yes", "--appendfsync", "everysec"]
+    ports:
+      - "6392:6379"
+    volumes:
+      - redis-queue-data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 3s
+      timeout: 2s
+      retries: 10
+      start_period: 3s
+    restart: unless-stopped
+
 volumes:
   pgdata:
   pgdata-restore:
+  redis-queue-data:

@@ -1,5 +1,6 @@
-import { checkout } from './checkout';
-import { log, note, pool, section } from './lib/db';
+import { checkout } from '../checkout';
+import { pool } from '../lib/db';
+import { log, note, section } from './helpers/output';
 
 const BUYERS = 50;
 const INITIAL_STOCK = 10;

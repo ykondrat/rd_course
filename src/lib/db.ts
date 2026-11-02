@@ -18,9 +18,8 @@ export type IsolationLevel = 'READ COMMITTED' | 'REPEATABLE READ' | 'SERIALIZABL
 export const sleep = (milliseconds: number): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, milliseconds));
 
-export const section = (title: string): void => console.log(`\n=== ${title} ===`);
-export const log = (tag: string, message: string): void => console.log(`  [${tag}] ${message}`);
-export const note = (message: string): void => console.log(`      ${message}`);
+const log = (tag: string, message: string): void => console.log(`  [${tag}] ${message}`);
+
 export const postgresErrorCode = (error: unknown): string | undefined =>
   (error as { code?: string }).code;
 
