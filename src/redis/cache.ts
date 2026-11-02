@@ -38,29 +38,34 @@ export async function cacheAside<T>(opts: CacheAsideOptions<T>): Promise<CacheAs
   const token = randomUUID();
 
   try {
-    const got = await redis.set(lockKey, token, 'PX', lockPx, 'NX');
+    for (;;) {
+      const got = await redis.set(lockKey, token, 'PX', lockPx, 'NX');
 
-    if (got === 'OK') {
-      try {
-        const value = await load();
+      if (got === 'OK') {
+        try {
+          const fresh = await redis.get(key);
 
-        await redis.set(key, JSON.stringify(value), 'EX', ttlSeconds);
+          if (fresh !== null) return { value: JSON.parse(fresh) as T, hit: true };
 
-        return { value, hit: false };
-      } finally {
-        await redis.eval(UNLOCK_LUA, 1, lockKey, token).catch(() => undefined);
+          const value = await load();
+
+          await redis.set(key, JSON.stringify(value), 'EX', ttlSeconds);
+
+          return { value, hit: false };
+        } finally {
+          await redis.eval(UNLOCK_LUA, 1, lockKey, token).catch(() => undefined);
+        }
+      }
+
+      for (;;) {
+        await sleep(20);
+
+        const again = await redis.get(key);
+
+        if (again !== null) return { value: JSON.parse(again) as T, hit: true };
+        if ((await redis.exists(lockKey)) === 0) break;
       }
     }
-
-    for (let i = 0; i < 50; i += 1) {
-      await sleep(20);
-
-      const again = await redis.get(key);
-
-      if (again !== null) return { value: JSON.parse(again) as T, hit: true };
-    }
-
-    return { value: await load(), hit: false };
   } catch {
     return { value: await load(), hit: false };
   }
