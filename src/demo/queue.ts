@@ -72,11 +72,13 @@ async function main(): Promise<number> {
 
   hdr('jobId dedup: two add with the same jobId -> one job in the queue');
   const dupOpts = { jobId: 'dup-1', delay: 60_000, removeOnComplete: false };
+  let added = 0;
   await queue.add('dup', { note: 'first' }, dupOpts);
+  added += 1;
   await queue.add('dup', { note: 'second' }, dupOpts);
-  const added = 2;
-  const dupJob = await queue.getJob('dup-1');
-  const queued = dupJob ? 1 : 0;
+  added += 1;
+  const pending = await queue.getJobs(['waiting', 'delayed']);
+  const queued = pending.filter((job) => job.name === 'dup').length;
 
   hdr('scheduler: upsertJobScheduler (upsert, not add) -> one scheduler, repeated runs');
   await queue.upsertJobScheduler('sched-1', { every: 500 }, { name: 'tick' });
