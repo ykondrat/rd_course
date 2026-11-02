@@ -1,7 +1,21 @@
-import { Body, Controller, Get, Headers, Param, ParseIntPipe, Patch, Post, Query, Res } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  Headers,
+  Param,
+  ParseIntPipe,
+  Patch,
+  Post,
+  Query,
+  Res,
+  UseGuards,
+} from '@nestjs/common';
 import type { Response } from 'express';
 import { filter } from 'rxjs';
 
+import { CurrentUser, Principal } from '../auth/current-user.decorator';
+import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { OrderEvent, OrderEventsService } from './order-events.service';
 import { CreateOrderBody, OrdersService } from './orders.service';
 
@@ -13,22 +27,26 @@ export class OrdersController {
   ) {}
 
   @Get()
-  list(@Query('limit') limit?: string, @Query('cursor') cursor?: string) {
-    return this.orders.list(limit === undefined ? 20 : Number(limit), cursor);
+  @UseGuards(JwtAuthGuard)
+  list(@CurrentUser() me: Principal, @Query('limit') limit?: string, @Query('cursor') cursor?: string) {
+    return this.orders.list(me, limit === undefined ? 20 : Number(limit), cursor);
   }
 
   @Get(':id')
-  getOne(@Param('id', ParseIntPipe) id: number) {
-    return this.orders.getById(id);
+  @UseGuards(JwtAuthGuard)
+  getOne(@CurrentUser() me: Principal, @Param('id', ParseIntPipe) id: number) {
+    return this.orders.getByIdFor(me, id);
   }
 
   @Post()
+  @UseGuards(JwtAuthGuard)
   async create(
+    @CurrentUser() me: Principal,
     @Headers('idempotency-key') key: string,
     @Body() body: CreateOrderBody,
     @Res({ passthrough: true }) res: Response,
   ) {
-    const { order, replay } = await this.orders.create(key, body);
+    const { order, replay } = await this.orders.create(me.userId, key, body);
 
     res.status(201).setHeader('Location', `/orders/${order.id}`);
 
@@ -38,8 +56,13 @@ export class OrdersController {
   }
 
   @Patch(':id/status')
-  updateStatus(@Param('id', ParseIntPipe) id: number, @Body() body: { status: string }) {
-    return this.orders.updateStatus(id, body.status);
+  @UseGuards(JwtAuthGuard)
+  updateStatus(
+    @CurrentUser() me: Principal,
+    @Param('id', ParseIntPipe) id: number,
+    @Body() body: { status: string },
+  ) {
+    return this.orders.updateStatus(me, id, body.status);
   }
 
   @Get(':id/events')

@@ -7,6 +7,7 @@ import { decodeCursor } from '../common/cursor';
 import { Keyset } from '../products/products.repository';
 import { OrderEventsService } from './order-events.service';
 import { fingerprintOf, resolveIdempotency, writeOrderWithOutbox } from '../outbox/order-write';
+import { Principal } from '../auth/current-user.decorator';
 import { OrderItemRow, OrderRow, OrdersRepository } from './orders.repository';
 
 export interface OrderItem {
@@ -26,7 +27,6 @@ export interface Order {
 }
 
 export interface CreateOrderBody {
-  user_id: number;
   items: Array<{ product_id: number; quantity: number }>;
 }
 
@@ -43,8 +43,12 @@ export class OrdersService {
     private readonly events: OrderEventsService,
   ) {}
 
-  async list(limit: number, cursor?: string): Promise<Page<Order>> {
-    const rows = await this.orders.listOrders(this.db, { limit: limit + 1, after: this.toKeyset(cursor) });
+  async list(me: Principal, limit: number, cursor?: string): Promise<Page<Order>> {
+    const rows = await this.orders.listOrders(this.db, {
+      limit: limit + 1,
+      after: this.toKeyset(cursor),
+      userId: me.userId,
+    });
     const page = buildPage(rows, limit);
     const itemsByOrder = await this.loadItemsMap(page.items.map((o) => o.id));
 
@@ -70,7 +74,23 @@ export class OrdersService {
     return row ? row.user_id : null;
   }
 
-  async updateStatus(id: number, status: string): Promise<Order> {
+  async getByIdFor(me: Principal, id: number): Promise<Order> {
+    const order = await this.getById(id);
+
+    if (order.user_id !== me.userId && me.role !== 'admin') {
+      throw new AppError(403, 'This order belongs to another user.', { code: 'not-owner' });
+    }
+
+    return order;
+  }
+
+  async updateStatus(me: Principal, id: number, status: string): Promise<Order> {
+    const existing = await this.getById(id);
+
+    if (existing.user_id !== me.userId && me.role !== 'admin') {
+      throw new AppError(403, 'This order belongs to another user.', { code: 'not-owner' });
+    }
+
     await this.db.withTransaction(async (client) => {
       const updated = await this.orders.updateStatus(client, id, status);
 
@@ -84,29 +104,20 @@ export class OrdersService {
     return order;
   }
 
-  async create(key: string, body: CreateOrderBody): Promise<CreateResult> {
-    return this.createInTransaction(key, body);
+  async create(userId: number, key: string, body: CreateOrderBody): Promise<CreateResult> {
+    return this.createInTransaction(userId, key, body);
   }
 
-  private async createInTransaction(key: string, body: CreateOrderBody): Promise<CreateResult> {
-    const fingerprint = fingerprintOf(body);
+  private async createInTransaction(userId: number, key: string, body: CreateOrderBody): Promise<CreateResult> {
+    const fingerprint = fingerprintOf({ userId, items: body.items });
 
     return this.db.withTransaction(async (client) => {
       const outcome = await resolveIdempotency(client, key, fingerprint);
 
       if (outcome.replay) return { order: outcome.order, replay: true };
 
-      if (!(await this.orders.userExists(client, body.user_id))) {
-        throw new AppError(422, `Unknown user id: ${body.user_id}.`, {
-          code: 'user-not-found',
-          errors: [
-            {
-              path: '/user_id',
-              message: `User ${body.user_id} does not exist`,
-              errorCode: 'user-not-found',
-            },
-          ],
-        });
+      if (!(await this.orders.userExists(client, userId))) {
+        throw new AppError(422, `Unknown user id: ${userId}.`, { code: 'user-not-found' });
       }
 
       const ids = [...new Set(body.items.map((i) => i.product_id))];
@@ -147,7 +158,7 @@ export class OrdersService {
       });
 
       const order = await writeOrderWithOutbox(client, key, {
-        userId: body.user_id,
+        userId,
         currency,
         items: computed,
       });

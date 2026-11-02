@@ -7,6 +7,7 @@ import { Verifier, VerifierOptions } from '@pact-foundation/pact';
 
 import { PgHandle, startPg } from '../integration/testkit/pg-container';
 import { applyContainerEnv } from '../integration/testkit/app-env';
+import { JwtService } from '../../src/auth/jwt.service';
 
 const SEED_ORDER_7 = `
   INSERT INTO users (id, email, full_name)
@@ -27,6 +28,7 @@ describe('Contract (provider): marketplace-api satisfies the web-app contract', 
   let pg: PgHandle;
   let app: INestApplication;
   let providerBaseUrl: string;
+  let accessToken: string;
 
   beforeAll(async () => {
     pg = await startPg('(provider)');
@@ -41,6 +43,7 @@ describe('Contract (provider): marketplace-api satisfies the web-app contract', 
     const { port } = new URL(await app.getUrl());
 
     providerBaseUrl = `http://127.0.0.1:${port}`;
+    accessToken = app.get(JwtService).issueAccess(7, 'customer').token;
   });
 
   afterAll(async () => {
@@ -55,6 +58,10 @@ describe('Contract (provider): marketplace-api satisfies the web-app contract', 
       provider: 'marketplace-api',
       providerBaseUrl,
       logLevel: 'warn',
+      requestFilter: (req, _res, next) => {
+        req.headers.authorization = `Bearer ${accessToken}`;
+        next();
+      },
       stateHandlers: {
         'order 7 exists': async () => {
           await pg.pool.query(SEED_ORDER_7);

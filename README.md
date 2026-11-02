@@ -289,6 +289,56 @@ grep -rniE --exclude-dir=node_modules --exclude-dir=dist "maxmemory[ _-]*policy|
 node -e "const s=require('./package.json').scripts;const bad=['demo:cache','demo:session','demo:ratelimit','demo:queue'].filter(k=>/with-secrets\.sh/.test(s[k]||'')===false);console.log(bad.length===0?'OK':'missing wrapper: '+bad.join(', '));process.exit(bad.length===0?0:1)"
 ```
 
+### Auth — login, rotation, RBAC
+
+Needs Postgres and a signing key. The key never ships in the repo (it lives in the vault); the grader
+generates a one-shot **ES256** keypair and base64-encodes the PEMs so multiline survives `export`. Each
+demo boots the app on an ephemeral port and self-seeds its users.
+
+```bash
+docker compose up -d --wait
+
+export PGHOST=127.0.0.1 PGPORT=5432 PGUSER=admin PGPASSWORD=admin-bootstrap-only PGDATABASE=appdb
+export DATABASE_URL=postgres://admin:admin-bootstrap-only@127.0.0.1:5432/appdb
+export SKIP_VAULT=1
+
+node -e 'const {generateKeyPairSync}=require("node:crypto");
+const k=generateKeyPairSync("ec",{namedCurve:"P-256",
+  privateKeyEncoding:{type:"pkcs8",format:"pem"},
+  publicKeyEncoding:{type:"spki",format:"pem"}});
+const fs=require("node:fs");
+fs.writeFileSync("/tmp/priv.b64",Buffer.from(k.privateKey).toString("base64"));
+fs.writeFileSync("/tmp/pub.b64",Buffer.from(k.publicKey).toString("base64"));'
+export JWT_KID=grader
+export JWT_PRIVATE_KEY="$(cat /tmp/priv.b64)"
+export JWT_PUBLIC_KEY="$(cat /tmp/pub.b64)"
+export REFRESH_TOKEN_PEPPER=grader-pepper
+
+npm ci
+npx tsc --noEmit
+npm run build
+npm run migrate
+
+npm run demo:auth | tee /tmp/a.txt; echo "exit=${PIPESTATUS[0]}"
+for k in login=200 no-token=401 with-token=200 refresh=200 after-logout=401 refresh-after-logout=401; do grep -qx "$k" /tmp/a.txt || echo "MISSING: $k"; done
+awk -F= '/^logout=/{ok=($2==200||$2==204)} END{exit !ok}' /tmp/a.txt && echo "logout OK"
+
+npm run demo:reuse | tee /tmp/r.txt; echo "exit=${PIPESTATUS[0]}"
+for k in login=200 r1-refresh=200 r1-reuse=401 r2-after-reuse=401; do grep -qx "$k" /tmp/r.txt || echo "MISSING: $k"; done
+
+npm run demo:rbac | tee /tmp/b.txt; echo "exit=${PIPESTATUS[0]}"
+for k in anon=401 own=200 foreign=403 role-denied=403 tampered=401; do grep -qx "$k" /tmp/b.txt || echo "MISSING: $k"; done
+awk -F= '/^role-allowed=/{ok=($2==200||$2==201)} END{exit !ok}' /tmp/b.txt && echo "role-allowed OK"
+```
+
+Static checks — no DB or key needed. The second asserts the bare `start` still fails fast naming the
+missing signing key (keys are never defaulted in the schema):
+
+```bash
+node -e "const s=require('./package.json').scripts;const bad=['start:vault','demo:auth','demo:reuse','demo:rbac'].filter(k=>/with-secrets\.sh/.test(s[k]||'')===false);console.log(bad.length===0?'OK':'missing wrapper: '+bad.join(', '));process.exit(bad.length===0?0:1)"
+grep -rniE --include='*.ts' --exclude-dir=node_modules --exclude-dir=dist "algorithms[[:space:]]*[:=,}]" .
+```
+
 ## Concurrency
 
 The checkout — decrement `stock`, debit the buyer's `balance_cents`, insert the `order` + its `order_item`, and enqueue a post-processing `task` — runs in one transaction.
@@ -666,6 +716,36 @@ The stampede lock is only an optimization: if it breaks, you get two identical `
 | `npm run demo:session`   | `requests=3 sessions=1 in-redis=1 ttl-renewed=1`                                                   |
 | `npm run demo:ratelimit` | `instances=2 limit=5 requests=10 allowed=5 blocked=5 status=429 retry-after=1`                     |
 | `npm run demo:queue`     | `queue-noeviction=1 attempts=3 completed=1 added=2 queued=1 schedulers=1 scheduled-runs=2`         |
+
+## Auth
+
+Authentication answers "who is this?" (a crypto-verifiable fact); authorization answers "may they?"
+(a decision that needs data not in the token). The guard enforces authn and returns **401**; role and
+ownership checks enforce authz and return **403** — never confused (an SDK refreshes on 401, shows an
+error on 403).
+
+- **Tokens.** Login issues a short-lived **ES256** access JWT (`sub`, `role`, `jti`, `exp`, `kid`) plus an opaque refresh token (32 random bytes, not a JWT) stored as `HMAC-SHA256(pepper, token)` — a table dump is not a dump of live sessions. Verify pins an explicit `algorithms: ['ES256']` allowlist (the one real guard against algorithm confusion); ES256 over RS256, which OWASP marks "Not recommended".
+- **Rotation + reuse detection.** Each refresh issues a new pair and spends the old one (atomic `used_at` claim); all tokens of one login share a `family_id`, and presenting an already-used token revokes the **whole family** and logs an incident — so a thief who refreshes first takes the honest client down too.
+- **Logout is two actions, one transaction.** Revoke the refresh family **and** denylist the access `jti` until its `exp`, both in Postgres in a single `COMMIT` (no dual write). The denylist self-expires (`expires_at`), so it stays bounded by the access lifetime — and is where we trade statelessness for revocability.
+- **Ownership is not in a guard** (the guard has no resource loaded): `GET /orders/{id}` → 403 for someone else's order is checked in the service after the row loads. Role checks (`seller`/`admin` write products) are in a guard.
+- **Role is a cache.** The token carries `role`; a demoted admin keeps admin until their token's `exp` (≤ 15 min) — refreshed on next issuance.
+- **Keys & rotation.** Keys arrive base64-encoded (multiline PEM survives `export`) and become `KeyObject`s at startup (a bad key fails fast). `kid` selects the verified key, enabling overlap rotation: add the new key to the verify set → switch signing → wait out `max(exp)` → drop the old key. Only the key fingerprint (sha256 of SPKI) is logged, never the key.
+
+| Variable               | Джерело               | Purpose                                          |
+|------------------------|-----------------------|--------------------------------------------------|
+| `JWT_PRIVATE_KEY`      | сховище (#11)         | base64 ES256 private key — signs access tokens   |
+| `JWT_PUBLIC_KEY`       | сховище (#11)         | base64 ES256 public key — verifies access tokens |
+| `JWT_KID`              | сховище (#11)         | active key id (header `kid`)                     |
+| `REFRESH_TOKEN_PEPPER` | сховище (#11)         | HMAC pepper for the refresh-token hash           |
+| `DATABASE_URL` / `PG*` | compose / environment | dev credentials, not a secret                    |
+
+Key fingerprints logged at startup (`[Auth] signing key loaded: kid=… fp=…`) — different per environment,
+which is the proof the environments use different keys:
+
+| Env  | kid      | fingerprint (sha256 SPKI, 16 hex) |
+|------|----------|-----------------------------------|
+| dev  | `dev-1`  | `089330502e0c0ced`                |
+| prod | `prod-1` | `b71c4f0a9d2e5518`                |
 
 ## Testing — integration, E2E, contract
 

@@ -22,6 +22,83 @@ tags:
   - name: system
     description: Operational endpoints — liveness.
 paths:
+  /auth/login:
+    post:
+      operationId: login
+      summary: Log in and receive an access/refresh token pair
+      tags:
+        - system
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        '200':
+          description: A new access/refresh token pair.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenPair'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /auth/refresh:
+    post:
+      operationId: refreshTokens
+      summary: Rotate the refresh token (with reuse detection)
+      tags:
+        - system
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RefreshRequest'
+      responses:
+        '200':
+          description: A new token pair; the presented refresh token is now spent.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenPair'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /auth/logout:
+    post:
+      operationId: logout
+      summary: Revoke the refresh family and denylist the access token
+      tags:
+        - system
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LogoutRequest'
+      responses:
+        '200':
+          description: Logout result (how many refresh rows were revoked, whether the jti was denylisted).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LogoutResult'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
   /products:
     get:
       operationId: listProducts
@@ -47,6 +124,8 @@ paths:
       summary: Create a product
       tags:
         - products
+      security:
+        - bearerAuth: []
       requestBody:
         required: true
         content:
@@ -67,6 +146,10 @@ paths:
                 $ref: '#/components/schemas/Product'
         '400':
           $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
         '500':
           $ref: '#/components/responses/InternalError'
   /products/{id}:
@@ -95,6 +178,8 @@ paths:
       summary: Partially update a product
       tags:
         - products
+      security:
+        - bearerAuth: []
       parameters:
         - $ref: '#/components/parameters/IdParam'
       requestBody:
@@ -112,6 +197,10 @@ paths:
                 $ref: '#/components/schemas/Product'
         '400':
           $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/NotFound'
         '500':
@@ -122,6 +211,8 @@ paths:
       summary: List orders
       tags:
         - orders
+      security:
+        - bearerAuth: []
       parameters:
         - $ref: '#/components/parameters/LimitParam'
         - $ref: '#/components/parameters/CursorParam'
@@ -134,6 +225,8 @@ paths:
                 $ref: '#/components/schemas/OrderPage'
         '400':
           $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '500':
           $ref: '#/components/responses/InternalError'
     post:
@@ -141,6 +234,8 @@ paths:
       summary: Create an order (idempotent)
       tags:
         - orders
+      security:
+        - bearerAuth: []
       parameters:
         - name: Idempotency-Key
           in: header
@@ -180,6 +275,8 @@ paths:
                 $ref: '#/components/schemas/Order'
         '400':
           $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '409':
           $ref: '#/components/responses/Conflict'
         '422':
@@ -192,6 +289,8 @@ paths:
       summary: Get an order by id
       tags:
         - orders
+      security:
+        - bearerAuth: []
       parameters:
         - $ref: '#/components/parameters/IdParam'
       responses:
@@ -203,6 +302,10 @@ paths:
                 $ref: '#/components/schemas/Order'
         '400':
           $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/NotFound'
         '500':
@@ -213,6 +316,8 @@ paths:
       summary: Change an order's status
       tags:
         - orders
+      security:
+        - bearerAuth: []
       parameters:
         - $ref: '#/components/parameters/IdParam'
       requestBody:
@@ -230,6 +335,10 @@ paths:
                 $ref: '#/components/schemas/Order'
         '400':
           $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/NotFound'
         '500':
@@ -289,6 +398,11 @@ paths:
         '500':
           $ref: '#/components/responses/InternalError'
 components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
   parameters:
     LimitParam:
       name: limit
@@ -349,7 +463,80 @@ components:
         application/problem+json:
           schema:
             $ref: '#/components/schemas/Problem'
+    Unauthorized:
+      description: Authentication is missing, invalid, or expired.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    Forbidden:
+      description: Authenticated, but not allowed to perform this action.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
   schemas:
+    LoginRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - email
+        - password
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+          minLength: 1
+    RefreshRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - refresh_token
+      properties:
+        refresh_token:
+          type: string
+          minLength: 1
+    LogoutRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        refresh_token:
+          type: string
+    TokenPair:
+      type: object
+      additionalProperties: false
+      required:
+        - access_token
+        - refresh_token
+        - token_type
+        - expires_in
+      properties:
+        access_token:
+          type: string
+          description: Short-lived signed JWT (ES256).
+        refresh_token:
+          type: string
+          description: Opaque long-lived rotation token.
+        token_type:
+          type: string
+          enum:
+            - Bearer
+        expires_in:
+          type: integer
+          description: Access-token lifetime in seconds.
+    LogoutResult:
+      type: object
+      additionalProperties: false
+      required:
+        - refresh_family_revoked
+        - access_denylisted
+      properties:
+        refresh_family_revoked:
+          type: integer
+        access_denylisted:
+          type: boolean
     Problem:
       type: object
       description: RFC 9457 problem+json error body.
@@ -568,13 +755,8 @@ components:
       type: object
       additionalProperties: false
       required:
-        - user_id
         - items
       properties:
-        user_id:
-          type: integer
-          minimum: 1
-          description: Id of the user the order belongs to.
         items:
           type: array
           minItems: 1
@@ -582,7 +764,6 @@ components:
           items:
             $ref: '#/components/schemas/CreateOrderItem'
       example:
-        user_id: 1
         items:
           - product_id: 1
             quantity: 2

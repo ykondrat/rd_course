@@ -62,3 +62,28 @@ export function loadRedisEnv(
 ): { REDIS_URL: string; REDIS_QUEUE_URL: string } {
   return RedisEnvSchema.parse(source);
 }
+
+export const AuthEnvSchema = z.object({
+  JWT_PRIVATE_KEY: z.string().min(1),
+  JWT_PUBLIC_KEY: z.string().min(1),
+  JWT_KID: z.string().min(1),
+  REFRESH_TOKEN_PEPPER: z.string().min(1),
+  JWT_ACCESS_TTL: z.coerce.number().int().positive().default(900),
+  JWT_REFRESH_TTL: z.coerce.number().int().positive().default(1209600),
+});
+
+export type AuthEnv = z.infer<typeof AuthEnvSchema>;
+
+export function loadAuthEnv(source: NodeJS.ProcessEnv = process.env): AuthEnv {
+  const result = AuthEnvSchema.safeParse(source);
+
+  if (!result.success) {
+    const details = result.error.issues
+      .map((issue) => `  - ${issue.path.join('.') || '(root)'}: ${issue.message}`)
+      .join('\n');
+
+    throw new Error(`Invalid auth configuration:\n${details}`);
+  }
+
+  return result.data;
+}
