@@ -9,6 +9,7 @@ import { AddConcurrencyStockBalanceTasks1790084975962 } from '../../../src/migra
 import { AddOutboxAndIdempotentConsumer1792500000000 } from '../../../src/migrations/1792500000000-AddOutboxAndIdempotentConsumer';
 import { AddReviews1793000000000 } from '../../../src/migrations/1793000000000-AddReviews';
 import { AddAuth1794000000000 } from '../../../src/migrations/1794000000000-AddAuth';
+import { AddRefreshAccessJti1795000000000 } from '../../../src/migrations/1795000000000-AddRefreshAccessJti';
 
 export interface DbConnection {
   host: string;
@@ -34,6 +35,7 @@ export async function applyMigrations(conn: DbConnection): Promise<void> {
       AddOutboxAndIdempotentConsumer1792500000000,
       AddReviews1793000000000,
       AddAuth1794000000000,
+      AddRefreshAccessJti1795000000000,
     ],
     synchronize: false,
   });

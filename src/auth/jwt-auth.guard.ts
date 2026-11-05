@@ -38,6 +38,7 @@ export class JwtAuthGuard implements CanActivate {
       role: claims.role,
       jti: claims.jti,
       exp: claims.exp,
+      sid: claims.sid,
     };
 
     return true;

@@ -27,9 +27,17 @@ export function loadSigningKeys(): SigningKeys {
   const env = loadAuthEnv();
   const privateKey = createPrivateKey(fromBase64Pem(env.JWT_PRIVATE_KEY));
   const publicKey = createPublicKey(fromBase64Pem(env.JWT_PUBLIC_KEY));
+  const logger = new Logger('Auth');
   const verifyKeys = new Map<string, KeyObject>([[env.JWT_KID, publicKey]]);
 
-  new Logger('Auth').log(`signing key loaded: kid=${env.JWT_KID} fp=${fingerprint(publicKey)}`);
+  for (const [kid, b64] of Object.entries(env.JWT_VERIFY_KEYS)) {
+    const key = createPublicKey(fromBase64Pem(b64));
+
+    verifyKeys.set(kid, key);
+    logger.log(`verify key loaded: kid=${kid} fp=${fingerprint(key)}`);
+  }
+
+  logger.log(`signing key loaded: kid=${env.JWT_KID} fp=${fingerprint(publicKey)}`);
 
   return {
     privateKey,

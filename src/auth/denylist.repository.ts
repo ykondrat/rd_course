@@ -12,6 +12,18 @@ export class DenylistRepository {
     );
   }
 
+  async denyFamily(db: Queryable, familyId: string): Promise<number> {
+    const { rowCount } = await db.query(
+      `INSERT INTO access_denylist (jti, expires_at)
+       SELECT access_jti, access_expires_at FROM refresh_tokens
+        WHERE family_id = $1 AND access_jti IS NOT NULL AND access_expires_at > now()
+       ON CONFLICT (jti) DO NOTHING`,
+      [familyId],
+    );
+
+    return rowCount ?? 0;
+  }
+
   async isDenied(db: Queryable, jti: string): Promise<boolean> {
     const { rowCount } = await db.query(
       `SELECT 1 FROM access_denylist WHERE jti = $1 AND expires_at > now()`,

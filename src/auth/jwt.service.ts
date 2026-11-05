@@ -12,6 +12,7 @@ export interface AccessClaims {
   aud: string;
   iat: number;
   exp: number;
+  sid?: string;
 }
 
 export interface IssuedAccess {
@@ -25,10 +26,9 @@ export interface IssuedAccess {
 export class JwtService {
   constructor(@Inject(SIGNING_KEYS) private readonly keys: SigningKeys) {}
 
-  issueAccess(userId: number, role: string): IssuedAccess {
+  issueAccess(userId: number, role: string, sid?: string): IssuedAccess {
     const jti = randomUUID();
-
-    const token = jwt.sign({ role, jti }, this.keys.privateKey, {
+    const token = jwt.sign({ role, jti, ...(sid ? { sid } : {}) }, this.keys.privateKey, {
       algorithm: ACCESS_ALGORITHM,
       subject: String(userId),
       issuer: ISSUER,
@@ -36,7 +36,6 @@ export class JwtService {
       expiresIn: this.keys.accessTtlSec,
       keyid: this.keys.kid,
     });
-
     const { exp } = jwt.decode(token) as { exp: number };
 
     return { token, jti, exp, expiresInSec: this.keys.accessTtlSec };

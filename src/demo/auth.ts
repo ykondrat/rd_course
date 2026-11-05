@@ -30,16 +30,13 @@ async function main(): Promise<number> {
     const refreshStatus = refreshRes.status;
     const next = (await refreshRes.json()) as { access_token: string; refresh_token: string };
 
-    hdr('logout kills BOTH tokens (revoke refresh family + denylist access jti)');
+    hdr('logout ends the whole session (revoke refresh family + denylist every access jti of it)');
     const logout = (
-      await authedFetch(`${baseUrl}/auth/logout`, {
-        method: 'POST',
-        token: next.access_token,
-        body: { refresh_token: next.refresh_token },
-      })
+      await authedFetch(`${baseUrl}/auth/logout`, { method: 'POST', token: next.access_token })
     ).status;
 
     const afterLogout = (await authedFetch(orderUrl, { token: next.access_token })).status;
+    const loginAccessAfterLogout = (await authedFetch(orderUrl, { token: tokens.access_token })).status;
     const refreshAfterLogout = (
       await authedFetch(`${baseUrl}/auth/refresh`, { method: 'POST', body: { refresh_token: next.refresh_token } })
     ).status;
@@ -51,6 +48,7 @@ async function main(): Promise<number> {
     kv('refresh', refreshStatus);
     kv('logout', logout);
     kv('after-logout', afterLogout);
+    kv('login-access-after-logout', loginAccessAfterLogout);
     kv('refresh-after-logout', refreshAfterLogout);
 
     const ok =
@@ -60,10 +58,11 @@ async function main(): Promise<number> {
       refreshStatus === 200 &&
       (logout === 200 || logout === 204) &&
       afterLogout === 401 &&
+      loginAccessAfterLogout === 401 &&
       refreshAfterLogout === 401;
 
     if (!ok) {
-      note('INVARIANT VIOLATED: expected login=200 no-token=401 with-token=200 refresh=200 logout=200|204 after-logout=401 refresh-after-logout=401');
+      note('INVARIANT VIOLATED: expected login=200 no-token=401 with-token=200 refresh=200 logout=200|204 after-logout=401 login-access-after-logout=401 refresh-after-logout=401');
     }
 
     return ok ? 0 : 1;

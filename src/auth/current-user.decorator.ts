@@ -6,6 +6,7 @@ export interface Principal {
   role: string;
   jti: string;
   exp: number;
+  sid?: string;
 }
 
 export const CurrentUser = createParamDecorator((_data: unknown, ctx: ExecutionContext): Principal => {

@@ -75,20 +75,14 @@ paths:
   /auth/logout:
     post:
       operationId: logout
-      summary: Revoke the refresh family and denylist the access token
+      summary: End the session — revoke its refresh family and denylist all its access tokens
       tags:
         - system
       security:
         - bearerAuth: []
-      requestBody:
-        required: false
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/LogoutRequest'
       responses:
         '200':
-          description: Logout result (how many refresh rows were revoked, whether the jti was denylisted).
+          description: Logout result (how many refresh rows of the session were revoked, whether the access tokens were denylisted).
           content:
             application/json:
               schema:
@@ -498,12 +492,6 @@ components:
         refresh_token:
           type: string
           minLength: 1
-    LogoutRequest:
-      type: object
-      additionalProperties: false
-      properties:
-        refresh_token:
-          type: string
     TokenPair:
       type: object
       additionalProperties: false

@@ -12,9 +12,17 @@ interface RefreshRow {
   expires_at: string;
 }
 
-export type RotateResult =
-  | { status: 'ok'; userId: number; familyId: string; token: string }
-  | { status: 'reuse'; familyId: string; userId: number; revoked: number }
+export interface IssueRefresh {
+  familyId: string;
+  userId: number;
+  ttlSec: number;
+  accessJti: string;
+  accessExpEpochSec: number;
+}
+
+export type ClaimResult =
+  | { status: 'ok'; userId: number; familyId: string }
+  | { status: 'reuse'; familyId: string; userId: number }
   | { status: 'invalid' };
 
 @Injectable()
@@ -23,19 +31,19 @@ export class RefreshRepository {
     return createHmac('sha256', pepper).update(token).digest('hex');
   }
 
-  async issueFamily(db: Queryable, pepper: string, userId: number, ttlSec: number): Promise<string> {
+  async issue(db: Queryable, pepper: string, p: IssueRefresh): Promise<string> {
     const token = randomBytes(32).toString('base64url');
 
     await db.query(
-      `INSERT INTO refresh_tokens (family_id, user_id, token_hash, expires_at)
-       VALUES (gen_random_uuid(), $1, $2, now() + make_interval(secs => $3))`,
-      [userId, this.hash(pepper, token), ttlSec],
+      `INSERT INTO refresh_tokens (family_id, user_id, token_hash, expires_at, access_jti, access_expires_at)
+       VALUES ($1, $2, $3, now() + make_interval(secs => $4), $5, to_timestamp($6))`,
+      [p.familyId, p.userId, this.hash(pepper, token), p.ttlSec, p.accessJti, p.accessExpEpochSec],
     );
 
     return token;
   }
 
-  async rotate(db: Queryable, pepper: string, token: string, ttlSec: number): Promise<RotateResult> {
+  async claim(db: Queryable, pepper: string, token: string): Promise<ClaimResult> {
     const found = await db.query(
       `SELECT id, family_id, user_id, used_at, revoked_at, expires_at
          FROM refresh_tokens WHERE token_hash = $1`,
@@ -53,20 +61,10 @@ export class RefreshRepository {
     );
 
     if ((claim.rowCount ?? 0) === 0) {
-      const revoked = await this.revokeFamily(db, row.family_id);
-
-      return { status: 'reuse', familyId: row.family_id, userId: row.user_id, revoked };
+      return { status: 'reuse', familyId: row.family_id, userId: Number(row.user_id) };
     }
 
-    const next = randomBytes(32).toString('base64url');
-
-    await db.query(
-      `INSERT INTO refresh_tokens (family_id, user_id, token_hash, expires_at)
-       VALUES ($1, $2, $3, now() + make_interval(secs => $4))`,
-      [row.family_id, row.user_id, this.hash(pepper, next), ttlSec],
-    );
-
-    return { status: 'ok', userId: row.user_id, familyId: row.family_id, token: next };
+    return { status: 'ok', userId: Number(row.user_id), familyId: row.family_id };
   }
 
   async revokeFamily(db: Queryable, familyId: string): Promise<number> {
@@ -76,14 +74,5 @@ export class RefreshRepository {
     );
 
     return r.rowCount ?? 0;
-  }
-
-  async familyOf(db: Queryable, pepper: string, token: string): Promise<string | null> {
-    const { rows } = await db.query(
-      `SELECT family_id FROM refresh_tokens WHERE token_hash = $1`,
-      [this.hash(pepper, token)],
-    );
-
-    return rows[0] ? (rows[0].family_id as string) : null;
   }
 }

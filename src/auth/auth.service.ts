@@ -1,8 +1,10 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
+import { randomUUID } from 'node:crypto';
 
 import { AppError } from '../common/problem';
 import { Queryable } from '../common/queryable';
 import { DatabaseService } from '../database/database.service';
+import { Principal } from './current-user.decorator';
 import { DenylistRepository } from './denylist.repository';
 import { JwtService } from './jwt.service';
 import { verifyPassword } from './password';
@@ -39,18 +41,19 @@ export class AuthService {
       throw new AppError(401, 'Invalid credentials.', { code: 'invalid-credentials' });
     }
 
-    const token = await this.refresh.issueFamily(this.db, this.keys.pepper, Number(user.id), this.keys.refreshTtlSec);
-    const access = this.jwt.issueAccess(Number(user.id), user.role);
-
-    return this.pair(access.token, access.expiresInSec, token);
+    return this.issuePair(this.db, Number(user.id), user.role, randomUUID());
   }
 
   async refreshTokens(refreshToken: string): Promise<TokenPair> {
     const result = await this.db.withTransaction(async (client: Queryable) => {
-      const out = await this.refresh.rotate(client, this.keys.pepper, refreshToken, this.keys.refreshTtlSec);
+      const out = await this.refresh.claim(client, this.keys.pepper, refreshToken);
 
       if (out.status === 'reuse') {
-        this.logger.warn(`refresh_reuse_detected family=${out.familyId} user=${out.userId} revoked=${out.revoked}`);
+        const revoked = await this.revokeSession(client, out.familyId);
+
+        this.logger.warn(
+          `refresh_reuse_detected family=${out.familyId} user=${out.userId} revoked=${revoked.refresh} denylisted=${revoked.access}`,
+        );
 
         return null;
       }
@@ -58,9 +61,8 @@ export class AuthService {
       if (out.status === 'invalid') return null;
 
       const u = await client.query(`SELECT role FROM users WHERE id = $1`, [out.userId]);
-      const access = this.jwt.issueAccess(out.userId, u.rows[0].role);
 
-      return this.pair(access.token, access.expiresInSec, out.token);
+      return this.issuePair(client, out.userId, u.rows[0].role, out.familyId);
     });
 
     if (!result) throw new AppError(401, 'Refresh token rejected.', { code: 'refresh-rejected' });
@@ -68,25 +70,37 @@ export class AuthService {
     return result;
   }
 
-  async logout(
-    jti: string,
-    accessExpEpochSec: number,
-    refreshToken: string | undefined,
-  ): Promise<{ refresh_family_revoked: number; access_denylisted: boolean }> {
+  async logout(me: Principal): Promise<{ refresh_family_revoked: number; access_denylisted: boolean }> {
     return this.db.withTransaction(async (client: Queryable) => {
       let familyRevoked = 0;
 
-      if (refreshToken) {
-        const familyId = await this.refresh.familyOf(client, this.keys.pepper, refreshToken);
+      if (me.sid) familyRevoked = (await this.revokeSession(client, me.sid)).refresh;
 
-        if (familyId) familyRevoked = await this.refresh.revokeFamily(client, familyId);
-      }
-
-      await this.denylist.deny(client, jti, accessExpEpochSec);
+      await this.denylist.deny(client, me.jti, me.exp);
       await this.denylist.cleanupExpired(client);
 
       return { refresh_family_revoked: familyRevoked, access_denylisted: true };
     });
+  }
+
+  private async issuePair(db: Queryable, userId: number, role: string, familyId: string): Promise<TokenPair> {
+    const access = this.jwt.issueAccess(userId, role, familyId);
+    const token = await this.refresh.issue(db, this.keys.pepper, {
+      familyId,
+      userId,
+      ttlSec: this.keys.refreshTtlSec,
+      accessJti: access.jti,
+      accessExpEpochSec: access.exp,
+    });
+
+    return this.pair(access.token, access.expiresInSec, token);
+  }
+
+  private async revokeSession(db: Queryable, familyId: string): Promise<{ refresh: number; access: number }> {
+    const refresh = await this.refresh.revokeFamily(db, familyId);
+    const access = await this.denylist.denyFamily(db, familyId);
+
+    return { refresh, access };
   }
 
   private pair(accessToken: string, expiresInSec: number, refreshToken: string): TokenPair {

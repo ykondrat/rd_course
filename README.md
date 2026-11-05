@@ -319,14 +319,21 @@ npx tsc --noEmit
 npm run build
 npm run migrate
 
-npm run demo:auth | tee /tmp/a.txt; echo "exit=${PIPESTATUS[0]}"
-for k in login=200 no-token=401 with-token=200 refresh=200 after-logout=401 refresh-after-logout=401; do grep -qx "$k" /tmp/a.txt || echo "MISSING: $k"; done
+# The demos seed with TRUNCATE, so they connect as `admin`. The pool prefers `secrets/db_password`
+# (app_user's password, created in Quick start) over PGPASSWORD, so run them from a directory
+# without `secrets/`; OPENAPI_SPEC must then be absolute.
+export OPENAPI_SPEC="$PWD/openapi/openapi.yaml"
+DEMO_CWD="$(mktemp -d)"
+demo() { (cd "$DEMO_CWD" && node "$OLDPWD/dist/demo/$1.js"); }
+
+demo auth | tee /tmp/a.txt; echo "exit=${PIPESTATUS[0]}"
+for k in login=200 no-token=401 with-token=200 refresh=200 after-logout=401 login-access-after-logout=401 refresh-after-logout=401; do grep -qx "$k" /tmp/a.txt || echo "MISSING: $k"; done
 awk -F= '/^logout=/{ok=($2==200||$2==204)} END{exit !ok}' /tmp/a.txt && echo "logout OK"
 
-npm run demo:reuse | tee /tmp/r.txt; echo "exit=${PIPESTATUS[0]}"
+demo reuse | tee /tmp/r.txt; echo "exit=${PIPESTATUS[0]}"
 for k in login=200 r1-refresh=200 r1-reuse=401 r2-after-reuse=401; do grep -qx "$k" /tmp/r.txt || echo "MISSING: $k"; done
 
-npm run demo:rbac | tee /tmp/b.txt; echo "exit=${PIPESTATUS[0]}"
+demo rbac | tee /tmp/b.txt; echo "exit=${PIPESTATUS[0]}"
 for k in anon=401 own=200 foreign=403 role-denied=403 tampered=401; do grep -qx "$k" /tmp/b.txt || echo "MISSING: $k"; done
 awk -F= '/^role-allowed=/{ok=($2==200||$2==201)} END{exit !ok}' /tmp/b.txt && echo "role-allowed OK"
 ```
@@ -724,18 +731,19 @@ Authentication answers "who is this?" (a crypto-verifiable fact); authorization 
 ownership checks enforce authz and return **403** — never confused (an SDK refreshes on 401, shows an
 error on 403).
 
-- **Tokens.** Login issues a short-lived **ES256** access JWT (`sub`, `role`, `jti`, `exp`, `kid`) plus an opaque refresh token (32 random bytes, not a JWT) stored as `HMAC-SHA256(pepper, token)` — a table dump is not a dump of live sessions. Verify pins an explicit `algorithms: ['ES256']` allowlist (the one real guard against algorithm confusion); ES256 over RS256, which OWASP marks "Not recommended".
-- **Rotation + reuse detection.** Each refresh issues a new pair and spends the old one (atomic `used_at` claim); all tokens of one login share a `family_id`, and presenting an already-used token revokes the **whole family** and logs an incident — so a thief who refreshes first takes the honest client down too.
-- **Logout is two actions, one transaction.** Revoke the refresh family **and** denylist the access `jti` until its `exp`, both in Postgres in a single `COMMIT` (no dual write). The denylist self-expires (`expires_at`), so it stays bounded by the access lifetime — and is where we trade statelessness for revocability.
+- **Tokens.** Login issues a short-lived **ES256** access JWT (`sub`, `role`, `jti`, `sid`, `exp`, `kid`; `sid` = the refresh `family_id`, i.e. the session) plus an opaque refresh token (32 random bytes, not a JWT) stored as `HMAC-SHA256(pepper, token)` — a table dump is not a dump of live sessions. Verify pins an explicit `algorithms: ['ES256']` allowlist (the one real guard against algorithm confusion); ES256 over RS256, which OWASP marks "Not recommended".
+- **Rotation + reuse detection.** Each refresh issues a new pair and spends the old one (atomic `used_at` claim); all tokens of one login share a `family_id`, and presenting an already-used token revokes the **whole family** (refresh rows + every live access `jti` of it) and logs an incident — so a thief who refreshes first takes the honest client down too.
+- **Logout ends the session, in one transaction.** The family comes from the access token's `sid` (no request body — revocation never depends on what the client chose to send): revoke every refresh token of the family **and** denylist every still-live access `jti` ever issued in it (each refresh row records the access `jti`/`exp` minted with it), until its `exp`, in a single `COMMIT` (no dual write). The denylist self-expires (`expires_at`), so it stays bounded by the access lifetime — and is where we trade statelessness for revocability.
 - **Ownership is not in a guard** (the guard has no resource loaded): `GET /orders/{id}` → 403 for someone else's order is checked in the service after the row loads. Role checks (`seller`/`admin` write products) are in a guard.
 - **Role is a cache.** The token carries `role`; a demoted admin keeps admin until their token's `exp` (≤ 15 min) — refreshed on next issuance.
-- **Keys & rotation.** Keys arrive base64-encoded (multiline PEM survives `export`) and become `KeyObject`s at startup (a bad key fails fast). `kid` selects the verified key, enabling overlap rotation: add the new key to the verify set → switch signing → wait out `max(exp)` → drop the old key. Only the key fingerprint (sha256 of SPKI) is logged, never the key.
+- **Keys & rotation.** Keys arrive base64-encoded (multiline PEM survives `export`) and become `KeyObject`s at startup (a bad key fails fast). `kid` selects the verified key from a set: the active `JWT_KID`→`JWT_PUBLIC_KEY` plus `JWT_VERIFY_KEYS`. Overlap rotation: put the new key in `JWT_VERIFY_KEYS` → switch signing (`JWT_KID`/`JWT_PRIVATE_KEY`/`JWT_PUBLIC_KEY` to the new key, the old one moves into `JWT_VERIFY_KEYS`) → wait out `max(exp)` → drop the old key. Only the key fingerprint (sha256 of SPKI) is logged, never the key.
 
 | Variable               | Джерело               | Purpose                                          |
 |------------------------|-----------------------|--------------------------------------------------|
 | `JWT_PRIVATE_KEY`      | сховище (#11)         | base64 ES256 private key — signs access tokens   |
 | `JWT_PUBLIC_KEY`       | сховище (#11)         | base64 ES256 public key — verifies access tokens |
 | `JWT_KID`              | сховище (#11)         | active key id (header `kid`)                     |
+| `JWT_VERIFY_KEYS`      | сховище (#11)         | optional JSON `{"<kid>": "<base64 PEM>"}` — extra verify-only keys during rotation (default `{}`) |
 | `REFRESH_TOKEN_PEPPER` | сховище (#11)         | HMAC pepper for the refresh-token hash           |
 | `DATABASE_URL` / `PG*` | compose / environment | dev credentials, not a secret                    |
 
