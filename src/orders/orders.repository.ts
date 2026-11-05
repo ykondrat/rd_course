@@ -124,17 +124,26 @@ export class OrdersRepository {
     return (rows[0] as OrderRow) ?? null;
   }
 
-  async listOrders(db: Queryable, opts: { limit: number; after?: Keyset }): Promise<OrderRow[]> {
+  async listOrders(
+    db: Queryable,
+    opts: { limit: number; after?: Keyset; userId?: number },
+  ): Promise<OrderRow[]> {
     const params: unknown[] = [];
-    let where = '';
+    const conditions: string[] = [];
+
+    if (opts.userId !== undefined) {
+      params.push(opts.userId);
+      conditions.push(`user_id = $${params.length}`);
+    }
 
     if (opts.after) {
       params.push(opts.after.createdAt, opts.after.id);
-      where = 'WHERE (created_at, id) < ($1, $2)';
+      conditions.push(`(created_at, id) < ($${params.length - 1}, $${params.length})`);
     }
 
     params.push(opts.limit);
 
+    const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
     const { rows } = await db.query(
       `SELECT ${ORDER_COLS} FROM orders ${where} ORDER BY created_at DESC, id DESC LIMIT $${params.length}`,
       params,

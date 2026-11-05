@@ -62,3 +62,44 @@ export function loadRedisEnv(
 ): { REDIS_URL: string; REDIS_QUEUE_URL: string } {
   return RedisEnvSchema.parse(source);
 }
+
+export const AuthEnvSchema = z.object({
+  JWT_PRIVATE_KEY: z.string().min(1),
+  JWT_PUBLIC_KEY: z.string().min(1),
+  JWT_KID: z.string().min(1),
+  JWT_VERIFY_KEYS: z
+    .string()
+    .default('{}')
+    .transform((raw, ctx) => {
+      try {
+        return JSON.parse(raw) as unknown;
+      } catch {
+        ctx.addIssue({ code: 'custom', message: 'must be a JSON object {"<kid>": "<base64 PEM>"}' });
+
+        return z.NEVER;
+      }
+    })
+    .pipe(z.record(z.string().min(1), z.string().min(1))),
+  REFRESH_TOKEN_PEPPER: z.string().min(1),
+  JWT_ACCESS_TTL: z.coerce.number().int().positive().default(900),
+  JWT_REFRESH_TTL: z.coerce.number().int().positive().default(1209600),
+}).refine((env) => !(env.JWT_KID in env.JWT_VERIFY_KEYS), {
+  path: ['JWT_VERIFY_KEYS'],
+  message: 'must not contain JWT_KID — the active key comes from JWT_PUBLIC_KEY',
+});
+
+export type AuthEnv = z.infer<typeof AuthEnvSchema>;
+
+export function loadAuthEnv(source: NodeJS.ProcessEnv = process.env): AuthEnv {
+  const result = AuthEnvSchema.safeParse(source);
+
+  if (!result.success) {
+    const details = result.error.issues
+      .map((issue) => `  - ${issue.path.join('.') || '(root)'}: ${issue.message}`)
+      .join('\n');
+
+    throw new Error(`Invalid auth configuration:\n${details}`);
+  }
+
+  return result.data;
+}
