@@ -21,6 +21,10 @@ tags:
     description: Orders — cursor-paged listing and idempotent creation.
   - name: system
     description: Operational endpoints — liveness.
+  - name: files
+    description: >-
+      Files — two-step upload (intent, bytes straight to object storage via a
+      presigned URL, commit), multipart resume and short-lived download links.
 paths:
   /auth/login:
     post:
@@ -374,6 +378,135 @@ paths:
           $ref: '#/components/responses/NotFound'
         '500':
           $ref: '#/components/responses/InternalError'
+  /uploads/intent:
+    post:
+      operationId: createUploadIntent
+      summary: Declare an upload and receive presigned URL(s) — bytes never pass through the API
+      tags:
+        - files
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: false
+          description: >-
+            Optional client key for one logical upload. Repeating it returns the
+            same file (same object key) with freshly signed URLs instead of
+            creating a second object.
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 255
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UploadIntentRequest'
+      responses:
+        '200':
+          description: >-
+            The PENDING file and where to put its bytes — a single presigned PUT,
+            or presigned URLs for every part of a multipart upload.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UploadIntent'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /uploads/{id}/parts:
+    get:
+      operationId: getUploadParts
+      summary: Multipart state (ListParts) — which parts are already stored, URLs for the missing ones
+      tags:
+        - files
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/FileIdParam'
+      responses:
+        '200':
+          description: Uploaded part numbers and presigned URLs for the parts still missing.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UploadParts'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /uploads/commit:
+    post:
+      operationId: commitUpload
+      summary: Confirm the upload — HeadObject must see the object (and the expected size)
+      tags:
+        - files
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UploadCommitRequest'
+      responses:
+        '200':
+          description: The file is COMPLETED.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UploadCommit'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /files/{id}:
+    get:
+      operationId: downloadFile
+      summary: Redirect to a fresh one-minute presigned GET (the guard runs on every request)
+      tags:
+        - files
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/FileIdParam'
+      responses:
+        '302':
+          description: Redirect to a short-lived presigned URL of the object.
+          headers:
+            Location:
+              description: Presigned GET URL, valid for 60 seconds.
+              schema:
+                type: string
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/InternalError'
   /health:
     get:
       operationId: getHealth
@@ -426,6 +559,14 @@ components:
       schema:
         type: integer
         minimum: 1
+    FileIdParam:
+      name: id
+      in: path
+      required: true
+      description: File identifier (UUID) returned by the upload intent.
+      schema:
+        type: string
+        format: uuid
   responses:
     BadRequest:
       description: The request was malformed or failed schema validation.
@@ -848,3 +989,139 @@ components:
               type: array
               items:
                 $ref: '#/components/schemas/Order'
+    UploadIntentRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - filename
+        - content_type
+        - size
+      properties:
+        filename:
+          type: string
+          minLength: 1
+          maxLength: 255
+          description: Client file name — informational only, never part of the object key.
+        content_type:
+          type: string
+          minLength: 1
+          maxLength: 100
+          description: Must be on the server allowlist; the key extension is derived from it.
+        size:
+          type: integer
+          minimum: 1
+          description: Expected size in bytes — signed into the PUT and checked on commit.
+    PartUrl:
+      type: object
+      additionalProperties: false
+      required:
+        - part_number
+        - url
+      properties:
+        part_number:
+          type: integer
+          minimum: 1
+          maximum: 10000
+        url:
+          type: string
+    UploadIntent:
+      type: object
+      additionalProperties: false
+      required:
+        - file_id
+        - key
+        - mode
+        - expires_in
+      properties:
+        file_id:
+          type: string
+          format: uuid
+        key:
+          type: string
+          description: Server-generated object key uploads/{userId}/{uuid}.{ext}.
+        mode:
+          type: string
+          enum:
+            - single
+            - multipart
+        expires_in:
+          type: integer
+          description: Lifetime of the issued URL(s) in seconds.
+        url:
+          type: string
+          description: Presigned PUT (mode=single).
+        headers:
+          type: object
+          additionalProperties:
+            type: string
+          description: Headers the PUT must carry — they are part of the signature.
+        upload_id:
+          type: string
+        part_size:
+          type: integer
+        part_count:
+          type: integer
+        parts:
+          type: array
+          items:
+            $ref: '#/components/schemas/PartUrl'
+    UploadParts:
+      type: object
+      additionalProperties: false
+      required:
+        - file_id
+        - part_size
+        - part_count
+        - uploaded
+        - missing
+        - expires_in
+      properties:
+        file_id:
+          type: string
+          format: uuid
+        part_size:
+          type: integer
+        part_count:
+          type: integer
+        uploaded:
+          type: array
+          items:
+            type: integer
+        missing:
+          type: array
+          items:
+            $ref: '#/components/schemas/PartUrl'
+        expires_in:
+          type: integer
+    UploadCommitRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - file_id
+      properties:
+        file_id:
+          type: string
+          format: uuid
+    UploadCommit:
+      type: object
+      additionalProperties: false
+      required:
+        - file_id
+        - key
+        - status
+        - size
+        - etag
+      properties:
+        file_id:
+          type: string
+          format: uuid
+        key:
+          type: string
+        status:
+          type: string
+          enum:
+            - COMPLETED
+        size:
+          type: integer
+        etag:
+          type: string
