@@ -84,6 +84,14 @@ export async function headObject(
   }
 }
 
+export async function readFirstBytes(storage: Storage, key: string, length: number): Promise<Buffer> {
+  const object = await storage.s3.send(
+    new GetObjectCommand({ Bucket: storage.bucket, Key: key, Range: `bytes=0-${length - 1}` }),
+  );
+
+  return Buffer.from(await (object.Body as { transformToByteArray(): Promise<Uint8Array> }).transformToByteArray());
+}
+
 export async function listAllParts(storage: Storage, key: string, uploadId: string): Promise<UploadedPart[]> {
   const parts: UploadedPart[] = [];
   let marker: string | undefined;

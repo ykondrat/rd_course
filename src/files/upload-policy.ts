@@ -10,6 +10,23 @@ export const CONTENT_TYPE_ALLOWLIST: Readonly<Record<string, string>> = {
   'application/gzip': 'gz',
 };
 
+interface MagicBytes {
+  offset: number;
+  bytes: Buffer;
+}
+
+const ascii = (text: string): Buffer => Buffer.from(text, 'latin1');
+
+export const CONTENT_SIGNATURES: Readonly<Record<string, readonly MagicBytes[]>> = {
+  'image/png': [{ offset: 0, bytes: Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]) }],
+  'image/jpeg': [{ offset: 0, bytes: Buffer.from([0xff, 0xd8, 0xff]) }],
+  'image/webp': [{ offset: 0, bytes: ascii('RIFF') }, { offset: 8, bytes: ascii('WEBP') }],
+  'application/pdf': [{ offset: 0, bytes: ascii('%PDF-') }],
+  'application/gzip': [{ offset: 0, bytes: Buffer.from([0x1f, 0x8b]) }],
+};
+
+export const SIGNATURE_PROBE_BYTES = 16;
+
 export const PRESIGNED_PUT_TTL_SECONDS = 120;
 export const PART_URL_TTL_SECONDS = 900;
 export const DOWNLOAD_URL_TTL_SECONDS = 60;
@@ -21,6 +38,14 @@ export const MULTIPART_THRESHOLD_BYTES = 2 * MIN_PART_SIZE;
 
 export function extensionFor(contentType: string): string | undefined {
   return Object.hasOwn(CONTENT_TYPE_ALLOWLIST, contentType) ? CONTENT_TYPE_ALLOWLIST[contentType] : undefined;
+}
+
+export function matchesSignature(contentType: string, head: Buffer): boolean {
+  if (!Object.hasOwn(CONTENT_SIGNATURES, contentType)) return false;
+
+  return CONTENT_SIGNATURES[contentType].every(
+    ({ offset, bytes }) => head.length >= offset + bytes.length && head.subarray(offset, offset + bytes.length).equals(bytes),
+  );
 }
 
 export function buildObjectKey(userId: number, extension: string): string {
