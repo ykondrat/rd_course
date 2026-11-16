@@ -103,3 +103,27 @@ export function loadAuthEnv(source: NodeJS.ProcessEnv = process.env): AuthEnv {
 
   return result.data;
 }
+
+export const StorageEnvSchema = z.object({
+  STORAGE_ENDPOINT: z.url(),
+  STORAGE_REGION: z.string().min(1).default('us-east-1'),
+  STORAGE_ACCESS_KEY: z.string().min(1),
+  STORAGE_SECRET_KEY: z.string().min(1),
+  STORAGE_BUCKET: z.string().min(1),
+});
+
+export type StorageEnv = z.infer<typeof StorageEnvSchema>;
+
+export function loadStorageEnv(source: NodeJS.ProcessEnv = process.env): StorageEnv {
+  const result = StorageEnvSchema.safeParse(source);
+
+  if (!result.success) {
+    const details = result.error.issues
+      .map((issue) => `  - ${issue.path.join('.') || '(root)'}: ${issue.message}`)
+      .join('\n');
+
+    throw new Error(`Invalid storage configuration:\n${details}`);
+  }
+
+  return result.data;
+}

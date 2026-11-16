@@ -9,6 +9,7 @@ import { RedisCacheModule } from './redis/redis-cache.module';
 import { AuthModule } from './auth/auth.module';
 import { ProductsModule } from './products/products.module';
 import { OrdersModule } from './orders/orders.module';
+import { FilesModule } from './files/files.module';
 import { HealthController } from './health/health.controller';
 import { validate, type Env } from './config/env.schema';
 
@@ -25,6 +26,7 @@ import { validate, type Env } from './config/env.schema';
     AuthModule,
     ProductsModule,
     OrdersModule,
+    FilesModule,
   ],
   controllers: [HealthController],
   providers: [{ provide: APP_FILTER, useClass: ProblemExceptionFilter }],

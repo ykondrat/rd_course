@@ -346,6 +346,67 @@ node -e "const s=require('./package.json').scripts;const bad=['start:vault','dem
 grep -rniE --include='*.ts' --exclude-dir=node_modules --exclude-dir=dist "algorithms[[:space:]]*[:=,}]" .
 ```
 
+### Files — presigned upload, multipart resume, CDN
+
+- **Storage:** RustFS, a local S3-compatible emulator (MinIO's images are no longer on Docker Hub).
+- **Cache:** a small local edge (`src/cdn/edge.ts`) in front of the private bucket.
+- **Keys:** the values below are dev credentials from `docker-compose.yml`, not secrets. Real values live in the vault (#11).
+- **Demos:** each one cleans up its own state, creates the bucket if needed, prints `key=number` lines, and exits non-zero on failure.
+
+```bash
+docker compose --profile s3 up -d --wait postgres rustfs
+
+export PGHOST=127.0.0.1 PGPORT=5432 PGUSER=admin PGPASSWORD=admin-bootstrap-only PGDATABASE=appdb
+export DATABASE_URL=postgres://admin:admin-bootstrap-only@127.0.0.1:5432/appdb
+export STORAGE_ENDPOINT=http://127.0.0.1:22650
+export STORAGE_ACCESS_KEY=hw26user
+export STORAGE_SECRET_KEY=hw26secretpass
+export STORAGE_BUCKET=hw26-files
+export SKIP_VAULT=1      # the grader has no access to the vault
+
+node -e 'const {generateKeyPairSync}=require("node:crypto");
+const k=generateKeyPairSync("ec",{namedCurve:"P-256",
+  privateKeyEncoding:{type:"pkcs8",format:"pem"},
+  publicKeyEncoding:{type:"spki",format:"pem"}});
+const fs=require("node:fs");
+fs.writeFileSync("/tmp/priv.b64",Buffer.from(k.privateKey).toString("base64"));
+fs.writeFileSync("/tmp/pub.b64",Buffer.from(k.publicKey).toString("base64"));'
+export JWT_KID=grader
+export JWT_PRIVATE_KEY="$(cat /tmp/priv.b64)"
+export JWT_PUBLIC_KEY="$(cat /tmp/pub.b64)"
+export REFRESH_TOKEN_PEPPER=grader-pepper
+
+npm ci
+npx tsc --noEmit
+npm run build
+npm run migrate
+
+npm run demo:upload | tee /tmp/u.txt; echo "exit=${PIPESTATUS[0]}"
+for k in intent=200 key-from-server=1 api-alive=0 put-offline=200 commit=200 tampered=403 expired=403; do
+  grep -qx "$k" /tmp/u.txt || echo "MISSING: $k"
+done
+awk -F= '/^commit-without-bytes=/{o=($2>=400 && $2<500)} END{exit !o}' /tmp/u.txt && echo "commit-without-bytes 4xx OK"
+
+for run in 1 2; do
+  npm run demo:multipart | tee /tmp/m$run.txt; echo "run $run exit=${PIPESTATUS[0]}"
+  for k in head-before-complete=404 resumed-parts=1 complete=200 size-match=1 etag-multipart=1; do
+    grep -qx "$k" /tmp/m$run.txt || echo "run $run MISSING: $k"
+  done
+done
+
+npm run demo:cdn | tee /tmp/c.txt; echo "exit=${PIPESTATUS[0]}"
+for k in direct=403 edge-miss=200 edge-hit=200 cache-hit=1 new-name=1 new-url=200 content-changed=1; do
+  grep -qx "$k" /tmp/c.txt || echo "MISSING: $k"
+done
+```
+
+Static checks — no storage, DB, or vault needed:
+
+```bash
+node -e "const s=require('./package.json').scripts;const need=['demo:upload','demo:multipart','demo:cdn'];const bad=need.filter(k=>/with-secrets\.sh/.test(s[k]||'')===false);console.log(bad.length===0?'OK':'missing wrapper: '+bad.join(', '));process.exit(bad.length===0?0:1)"
+grep -q 'SKIP_VAULT' scripts/with-secrets.sh && echo "emergency entry present"
+```
+
 ## Concurrency
 
 The checkout — decrement `stock`, debit the buyer's `balance_cents`, insert the `order` + its `order_item`, and enqueue a post-processing `task` — runs in one transaction.
@@ -738,14 +799,14 @@ error on 403).
 - **Role is a cache.** The token carries `role`; a demoted admin keeps admin until their token's `exp` (≤ 15 min) — refreshed on next issuance.
 - **Keys & rotation.** Keys arrive base64-encoded (multiline PEM survives `export`) and become `KeyObject`s at startup (a bad key fails fast). `kid` selects the verified key from a set: the active `JWT_KID`→`JWT_PUBLIC_KEY` plus `JWT_VERIFY_KEYS`. Overlap rotation: put the new key in `JWT_VERIFY_KEYS` → switch signing (`JWT_KID`/`JWT_PRIVATE_KEY`/`JWT_PUBLIC_KEY` to the new key, the old one moves into `JWT_VERIFY_KEYS`) → wait out `max(exp)` → drop the old key. Only the key fingerprint (sha256 of SPKI) is logged, never the key.
 
-| Variable               | Джерело               | Purpose                                          |
-|------------------------|-----------------------|--------------------------------------------------|
-| `JWT_PRIVATE_KEY`      | сховище (#11)         | base64 ES256 private key — signs access tokens   |
-| `JWT_PUBLIC_KEY`       | сховище (#11)         | base64 ES256 public key — verifies access tokens |
-| `JWT_KID`              | сховище (#11)         | active key id (header `kid`)                     |
+| Variable               | Джерело               | Purpose                                                                                           |
+|------------------------|-----------------------|---------------------------------------------------------------------------------------------------|
+| `JWT_PRIVATE_KEY`      | сховище (#11)         | base64 ES256 private key — signs access tokens                                                    |
+| `JWT_PUBLIC_KEY`       | сховище (#11)         | base64 ES256 public key — verifies access tokens                                                  |
+| `JWT_KID`              | сховище (#11)         | active key id (header `kid`)                                                                      |
 | `JWT_VERIFY_KEYS`      | сховище (#11)         | optional JSON `{"<kid>": "<base64 PEM>"}` — extra verify-only keys during rotation (default `{}`) |
-| `REFRESH_TOKEN_PEPPER` | сховище (#11)         | HMAC pepper for the refresh-token hash           |
-| `DATABASE_URL` / `PG*` | compose / environment | dev credentials, not a secret                    |
+| `REFRESH_TOKEN_PEPPER` | сховище (#11)         | HMAC pepper for the refresh-token hash                                                            |
+| `DATABASE_URL` / `PG*` | compose / environment | dev credentials, not a secret                                                                     |
 
 Key fingerprints logged at startup (`[Auth] signing key loaded: kid=… fp=…`) — different per environment,
 which is the proof the environments use different keys:
@@ -754,6 +815,91 @@ which is the proof the environments use different keys:
 |------|----------|-----------------------------------|
 | dev  | `dev-1`  | `089330502e0c0ced`                |
 | prod | `prod-1` | `b71c4f0a9d2e5518`                |
+
+## Files
+
+File bytes go straight between the client and storage. The API only issues permissions and checks results.
+
+```
+client ──POST /uploads/intent──► API  → PENDING row + presigned URL(s)
+client ══PUT bytes═══════════════════════════════► S3 (private bucket)
+client ──POST /uploads/commit──► API ──HeadObject──► S3  → COMPLETED
+browser ──GET /files/:id───────► API ──302──► fresh 60 s presigned GET
+browser ──GET /app.<hash>.css──► edge (cache) ──► S3 assets/*   (direct → 403)
+```
+
+Code: `src/files/` (API + storage), `src/cdn/` (edge + asset publishing), `src/demo/` (demos).
+
+### Variables
+
+| Variable             | Meaning                              | Source                       |
+|----------------------|--------------------------------------|------------------------------|
+| `STORAGE_ENDPOINT`   | S3 API address (RustFS)              | vault (#11); grader `export` |
+| `STORAGE_REGION`     | signing region                       | default `us-east-1`          |
+| `STORAGE_ACCESS_KEY` | access key (read/write to all files) | vault (#11); grader `export` |
+| `STORAGE_SECRET_KEY` | secret key                           | vault (#11); grader `export` |
+| `STORAGE_BUCKET`     | private bucket                       | vault (#11); grader `export` |
+
+All variables are validated in `StorageEnvSchema`, and the demos read them only through
+`scripts/with-secrets.sh`, with no new env files.
+
+### CDN — local edge
+
+- The bucket is private, so a direct anonymous GET returns **403**.
+- `src/cdn/edge.ts` reads `assets/*` from the bucket with its own credentials, caches each object for its
+  `max-age`, and returns `X-Cache: HIT|MISS`. This is the same idea as OAC: the cache can reach storage,
+  the public can't.
+- AWS equivalent (configuration only, not deployed): CloudFront + OAC with this bucket policy. Without
+  `AWS:SourceArn`, any CloudFront distribution could read the bucket.
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [{
+    "Effect": "Allow",
+    "Principal": { "Service": "cloudfront.amazonaws.com" },
+    "Action": "s3:GetObject",
+    "Resource": "arn:aws:s3:::BUCKET_NAME/assets/*",
+    "Condition": { "StringEquals": {
+      "AWS:SourceArn": "arn:aws:cloudfront::ACCOUNT_ID:distribution/DISTRIBUTION_ID"
+    } }
+  }]
+}
+```
+
+### Update without invalidation
+
+Each asset is stored as `app.<content-hash>.css` with `Cache-Control: public, max-age=31536000, immutable`.
+The header is set on the object at upload time; without it nothing gets cached. New content gets a new
+name, so a deployment needs zero invalidations.
+
+### Numbers and why
+
+| What                   | Value                       | Why                                                                                                     |
+|------------------------|-----------------------------|---------------------------------------------------------------------------------------------------------|
+| Presigned PUT lifetime | 120 s                       | Avatar from a form: the upload starts right away. A presigned URL can't be revoked, so it's kept short. |
+| Part URL lifetime      | 900 s                       | One part on a slow link; the client can fetch fresh URLs via `/uploads/:id/parts`.                      |
+| Download URL lifetime  | 60 s                        | Issued fresh on every `GET /files/:id`, so it never needs to live long.                                 |
+| Part size              | `max(5 MiB, size / 10 000)` | S3 allows at most 10 000 parts, and every part except the last must be at least 5 MiB.                  |
+| Multipart threshold    | 10 MiB                      | Smaller files have at most one full part, so there is nothing to resume.                                |
+
+The object key is always `uploads/{userId}/{uuid}.{ext}`, and the extension comes from the content-type
+allowlist, never from `filename`. `commit` checks the size with `HeadObject`.
+
+### Not graded
+
+- Orphaned `PENDING` uploads should be removed by a nightly BullMQ job: abort the upload, delete the object,
+  delete the row.
+- The bucket needs a lifecycle rule `AbortIncompleteMultipartUpload: 7 days`, because unfinished uploads
+  are billed.
+
+### Results
+
+| Demo                  | Output                                                                                                                |
+|-----------------------|-----------------------------------------------------------------------------------------------------------------------|
+| `demo:upload`         | intent=200 key-from-server=1 api-alive=0 put-offline=200 commit=200 commit-without-bytes=409 tampered=403 expired=403 |
+| `demo:multipart` (×2) | head-before-complete=404 resumed-parts=1 complete=200 size-match=1 etag-multipart=1                                   |
+| `demo:cdn`            | direct=403 edge-miss=200 edge-hit=200 cache-hit=1 new-name=1 new-url=200 content-changed=1                            |
 
 ## Testing — integration, E2E, contract
 
