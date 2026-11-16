@@ -4,17 +4,19 @@ import { CompleteMultipartUploadCommand, CreateMultipartUploadCommand } from '@a
 import { AppError } from '../common/problem';
 import { DatabaseService } from '../database/database.service';
 import { FileRow, FilesRepository } from './files.repository';
-import { createStorage, headObject, listAllParts, presignGet, presignPart, presignPut, Storage } from './storage';
+import { createStorage, headObject, listAllParts, presignGet, presignPart, presignPut, readFirstBytes, Storage } from './storage';
 import {
   buildObjectKey,
   DOWNLOAD_URL_TTL_SECONDS,
   extensionFor,
+  matchesSignature,
   MAX_FILE_SIZE,
   needsMultipart,
   PART_URL_TTL_SECONDS,
   partCountFor,
   partSizeFor,
   PRESIGNED_PUT_TTL_SECONDS,
+  SIGNATURE_PROBE_BYTES,
 } from './upload-policy';
 
 export interface IntentBody {
@@ -81,7 +83,7 @@ export class FilesService {
     if (idempotencyKey) {
       const existing = await this.files.findByIdempotencyKey(this.db, ownerId, idempotencyKey);
 
-      if (existing) return this.describe(existing);
+      if (existing) return this.resume(existing);
     }
 
     const multipart = needsMultipart(body.size);
@@ -96,7 +98,7 @@ export class FilesService {
       idempotencyKey: idempotencyKey ?? null,
     });
 
-    if (!row) return this.describe((await this.files.findByIdempotencyKey(this.db, ownerId, idempotencyKey as string)) as FileRow);
+    if (!row) return this.resume((await this.files.findByIdempotencyKey(this.db, ownerId, idempotencyKey as string)) as FileRow);
     if (multipart) {
       const created = await this.storage.s3.send(
         new CreateMultipartUploadCommand({ Bucket: this.storage.bucket, Key: key, ContentType: body.content_type }),
@@ -144,6 +146,12 @@ export class FilesService {
     if (head.status !== 200) throw new AppError(409, 'Object is not in storage — nothing to commit.', { code: 'object-missing' });
     if (head.size !== row.size) throw new AppError(409, `Size mismatch: expected ${row.size}, got ${head.size}.`, { code: 'size-mismatch' });
 
+    const firstBytes = await readFirstBytes(this.storage, row.key, SIGNATURE_PROBE_BYTES);
+
+    if (!matchesSignature(row.content_type, firstBytes)) {
+      throw new AppError(409, `Object bytes do not match ${row.content_type}.`, { code: 'signature-mismatch' });
+    }
+
     const completed = await this.files.markCompleted(this.db, row.id, String(head.etag));
 
     this.logger.log(`commit file=${row.id} key=${row.key} size=${head.size}`);
@@ -175,6 +183,12 @@ export class FilesService {
         MultipartUpload: { Parts: parts.map((part) => ({ PartNumber: part.partNumber, ETag: part.etag })) },
       }),
     );
+  }
+
+  private resume(row: FileRow): Promise<IntentResult> {
+    if (row.status === 'COMPLETED') throw new AppError(409, 'Upload is already completed.', { code: 'already-completed' });
+
+    return this.describe(row);
   }
 
   private async describe(row: FileRow): Promise<IntentResult> {

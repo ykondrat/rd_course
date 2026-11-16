@@ -10,6 +10,7 @@ import { hdr, kv, note } from './helpers/output';
 import { ensureBucket, lineValue, removeDir, resetUserFiles, runIsolated, writeJob } from './helpers/storage-harness';
 
 const FILE_SIZE = 11 * MiB;
+const GZIP_MAGIC = Buffer.from([0x1f, 0x8b, 0x08]);
 const DIE_AFTER = 2;
 
 interface MultipartIntent {
@@ -26,6 +27,8 @@ function deterministicBytes(size: number): Buffer {
   const buffer = Buffer.alloc(size);
 
   for (let index = 0; index < size; index += 1) buffer[index] = (index * 31 + (index >> 20)) & 0xff;
+
+  GZIP_MAGIC.copy(buffer, 0);
 
   return buffer;
 }

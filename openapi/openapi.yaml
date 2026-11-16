@@ -393,7 +393,8 @@ paths:
           description: >-
             Optional client key for one logical upload. Repeating it returns the
             same file (same object key) with freshly signed URLs instead of
-            creating a second object.
+            creating a second object. Once that file is COMPLETED, repeating it
+            returns 409 — a fresh PUT would overwrite the committed object.
           schema:
             type: string
             minLength: 1
@@ -417,6 +418,8 @@ paths:
           $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '409':
+          $ref: '#/components/responses/Conflict'
         '422':
           $ref: '#/components/responses/Unprocessable'
         '500':
@@ -451,7 +454,7 @@ paths:
   /uploads/commit:
     post:
       operationId: commitUpload
-      summary: Confirm the upload — HeadObject must see the object (and the expected size)
+      summary: Confirm the upload — HeadObject must see the object (and the expected size), its first bytes must match the declared content type
       tags:
         - files
       security:
