@@ -3,6 +3,8 @@ import { z } from 'zod';
 export const EnvSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   PORT: z.coerce.number().int().positive().default(3000),
+  WARMUP_MS: z.coerce.number().int().nonnegative().default(0),
+  DRAIN_MS: z.coerce.number().int().nonnegative().default(5000),
   PGHOST: z.string().min(1),
   PGPORT: z.coerce.number().int().positive().default(5432),
   PGUSER: z.string().min(1),
