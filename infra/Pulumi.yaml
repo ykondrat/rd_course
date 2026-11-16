@@ -1,0 +1,28 @@
+name: rd-course
+runtime:
+  name: nodejs
+  options:
+    typescript: true
+description: The course API (NestJS) with Postgres and Redis on a local kind cluster.
+config:
+  rd-course:kubeContext:
+    type: string
+    default: kind-rd-course
+  rd-course:namespace:
+    type: string
+    default: marketplace
+  rd-course:image:
+    type: string
+    default: rd-course-api:prod
+  rd-course:replicas:
+    type: integer
+    default: 3
+  rd-course:profile:
+    type: string
+    default: good
+  rd-course:rev:
+    type: string
+    default: "1"
+  rd-course:nodePort:
+    type: integer
+    default: 30828

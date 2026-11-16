@@ -12,3 +12,9 @@ infisical/.secrets/
 .idea
 .rabbitmq-state/
 .DS_Store
+
+.npm_token
+.pulumi/
+infra/node_modules
+infra/bin
+infra/Pulumi.dev.yaml

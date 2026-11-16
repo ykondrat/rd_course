@@ -507,6 +507,38 @@ paths:
           $ref: '#/components/responses/Conflict'
         '500':
           $ref: '#/components/responses/InternalError'
+  /healthz:
+    get:
+      operationId: getLiveness
+      summary: Liveness probe — the process is alive
+      tags:
+        - system
+      responses:
+        '200':
+          description: The process is alive.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Liveness'
+  /readyz:
+    get:
+      operationId: getReadiness
+      summary: Readiness probe — the instance may receive traffic
+      tags:
+        - system
+      responses:
+        '200':
+          description: Listening, not draining, database reachable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Readiness'
+        '503':
+          description: Warming up, draining after SIGTERM, or the database is unreachable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Readiness'
   /health:
     get:
       operationId: getHealth
@@ -1125,3 +1157,25 @@ components:
           type: integer
         etag:
           type: string
+    Liveness:
+      type: object
+      additionalProperties: false
+      required:
+        - alive
+      properties:
+        alive:
+          type: boolean
+    Readiness:
+      type: object
+      additionalProperties: false
+      required:
+        - ready
+        - draining
+        - database
+      properties:
+        ready:
+          type: boolean
+        draining:
+          type: boolean
+        database:
+          type: boolean

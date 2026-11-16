@@ -12,4 +12,9 @@ secrets
 .idea
 README.md
 scripts
-infisical
+infisical.npm_token
+.pulumi
+infra
+k8s
+demo
+docker

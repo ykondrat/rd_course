@@ -11,6 +11,7 @@ import { ProductsModule } from './products/products.module';
 import { OrdersModule } from './orders/orders.module';
 import { FilesModule } from './files/files.module';
 import { HealthController } from './health/health.controller';
+import { ReadinessService } from './health/readiness.service';
 import { validate, type Env } from './config/env.schema';
 
 @Module({
@@ -29,7 +30,7 @@ import { validate, type Env } from './config/env.schema';
     FilesModule,
   ],
   controllers: [HealthController],
-  providers: [{ provide: APP_FILTER, useClass: ProblemExceptionFilter }],
+  providers: [ReadinessService, { provide: APP_FILTER, useClass: ProblemExceptionFilter }],
 })
 export class AppModule implements NestModule {
   constructor(private readonly config: ConfigService<Env, true>) {}

@@ -1,0 +1,31 @@
+name: image-scan
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+
+    env:
+      SCAN_MAX: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Build-stage secret (CI secret, never committed)
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN || 'ci-dummy-npm-token' }}
+        run: printf '%s' "$NPM_TOKEN" > .npm_token
+
+      - name: Build production image
+        run: npm run image:build
+
+      - name: Scan gate (CRITICAL+HIGH, fixable, computed against SCAN_MAX)
+        run: npm run scan

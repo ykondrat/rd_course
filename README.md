@@ -407,6 +407,53 @@ node -e "const s=require('./package.json').scripts;const need=['demo:upload','de
 grep -q 'SKIP_VAULT' scripts/with-secrets.sh && echo "emergency entry present"
 ```
 
+### Kubernetes — zero-downtime rollout on kind
+
+Needs Docker, `kind`, `kubectl`, `pulumi` (no cloud account). The vault values are exported (`SKIP_VAULT=1`);
+the Pulumi state lives in a local file backend.
+
+```bash
+export SKIP_VAULT=1
+export PGPASSWORD=grader-db-secret
+export JWT_KID=grader
+export REFRESH_TOKEN_PEPPER=grader-pepper
+node -e 'const {generateKeyPairSync}=require("node:crypto");
+const k=generateKeyPairSync("ec",{namedCurve:"P-256",
+  privateKeyEncoding:{type:"pkcs8",format:"pem"},
+  publicKeyEncoding:{type:"spki",format:"pem"}});
+const fs=require("node:fs");
+fs.writeFileSync("/tmp/priv.b64",Buffer.from(k.privateKey).toString("base64"));
+fs.writeFileSync("/tmp/pub.b64",Buffer.from(k.publicKey).toString("base64"));'
+export JWT_PRIVATE_KEY="$(cat /tmp/priv.b64)"
+export JWT_PUBLIC_KEY="$(cat /tmp/pub.b64)"
+export PULUMI_BACKEND_URL="file://$PWD/.pulumi"
+export PULUMI_CONFIG_PASSPHRASE=local-dev
+
+npm --prefix infra ci
+printf 'dummy-npm-token' > .npm_token
+npm run image:build
+npm run cluster:up
+npm run up
+
+(cd infra && npx tsc --noEmit); echo "infra tsc exit=$?"
+
+npm run demo:image | tee /tmp/img.txt
+SCAN_MAX=-1 npm run scan; echo "exit(max=-1)=$?"
+SCAN_MAX=99999 npm run scan; echo "exit(max=99999)=$?"
+
+npm run demo:rollout | tee /tmp/roll.txt; echo "exit=${PIPESTATUS[0]}"
+
+kubectl --context kind-rd-course -n marketplace get deploy api -o json > /tmp/dep.json
+kubectl --context kind-rd-course -n marketplace get hpa api -o json > /tmp/hpa.json
+kubectl --context kind-rd-course -n marketplace get pdb api -o jsonpath='{.status.disruptionsAllowed}{"\n"}'
+npm run demo:pdb | tee /tmp/pdb.txt
+
+npm run destroy && npm run cluster:down
+```
+
+Names for the criterion commands: namespace `marketplace`, Deployment / Service / PDB / HPA `api`, kube context
+`kind-rd-course`. The vault variables are the rows marked «сховище (#11)» in the `## Kubernetes` table.
+
 ## Concurrency
 
 The checkout — decrement `stock`, debit the buyer's `balance_cents`, insert the `order` + its `order_item`, and enqueue a post-processing `task` — runs in one transaction.
@@ -804,7 +851,7 @@ error on 403).
 | `JWT_PRIVATE_KEY`      | сховище (#11)         | base64 ES256 private key — signs access tokens                                                    |
 | `JWT_PUBLIC_KEY`       | сховище (#11)         | base64 ES256 public key — verifies access tokens                                                  |
 | `JWT_KID`              | сховище (#11)         | active key id (header `kid`)                                                                      |
-| `JWT_VERIFY_KEYS`      | сховище (#11)         | optional JSON `{"<kid>": "<base64 PEM>"}` — extra verify-only keys during rotation (default `{}`) |
+| `JWT_VERIFY_KEYS`      | vault (#11), optional | optional JSON `{"<kid>": "<base64 PEM>"}` — extra verify-only keys during rotation (default `{}`) |
 | `REFRESH_TOKEN_PEPPER` | сховище (#11)         | HMAC pepper for the refresh-token hash                                                            |
 | `DATABASE_URL` / `PG*` | compose / environment | dev credentials, not a secret                                                                     |
 
@@ -900,6 +947,85 @@ allowlist, never from `filename`. `commit` checks the size with `HeadObject`.
 | `demo:upload`         | intent=200 key-from-server=1 api-alive=0 put-offline=200 commit=200 commit-without-bytes=409 tampered=403 expired=403 |
 | `demo:multipart` (×2) | head-before-complete=404 resumed-parts=1 complete=200 size-match=1 etag-multipart=1                                   |
 | `demo:cdn`            | direct=403 edge-miss=200 edge-hit=200 cache-hit=1 new-name=1 new-url=200 content-changed=1                            |
+
+## Kubernetes
+
+The course API runs as a production image in a local **kind** cluster, deployed by a typed Pulumi
+program. Postgres and Redis run next to it in the same namespace.
+
+- **Cluster:** kind v0.33 (Kubernetes v1.37), one node, Docker with 7.7 GiB. The node container uses
+  ~800 MiB right after creation and ~1.6 GiB with the app (3 replicas), Postgres and Redis running.
+- **Image** (`docker/Dockerfile`): three stages; the final one is `gcr.io/distroless/nodejs24-debian12:nonroot`
+  (no shell, uid 65532). The build-time token comes in only through `RUN --mount=type=secret`, so it lands
+  in neither the image history, the config, nor any layer (`demo:image` searches all three).
+- **Scan gate** (`npm run scan`): trivy counts fixable CRITICAL+HIGH findings and compares them with
+  `SCAN_MAX`; the verdict is computed. CI (`.github/workflows/image-scan.yml`) runs it with `SCAN_MAX=15`.
+- **Pulumi** (`infra/`): Namespace, Secret, Deployment, Service (NodePort 30828 → host 22880), PDB, HPA,
+  plus Postgres and Redis. Stack `dev`, local file backend. `infra/Pulumi.dev.yaml` is generated
+  (it holds the passphrase salt and the `rev` the demo changes), so it is not committed; defaults live in
+  `infra/Pulumi.yaml`.
+
+### Variables
+
+| Variable                   | Source                              | Why                                                                       |
+|----------------------------|-------------------------------------|---------------------------------------------------------------------------|
+| `PGPASSWORD`               | сховище (#11)                       | database password; goes into the K8s Secret, used by the API and Postgres |
+| `JWT_PRIVATE_KEY`          | сховище (#11)                       | access-token signing key; goes into the K8s Secret                        |
+| `JWT_PUBLIC_KEY`           | сховище (#11)                       | access-token verify key; goes into the K8s Secret                         |
+| `JWT_KID`                  | сховище (#11)                       | active key id; goes into the K8s Secret                                   |
+| `REFRESH_TOKEN_PEPPER`     | сховище (#11)                       | refresh-token hash pepper; goes into the K8s Secret                       |
+| `PULUMI_CONFIG_PASSPHRASE` | сховище (#11)                       | encrypts secrets in the Pulumi state                                      |
+| `PULUMI_BACKEND_URL`       | environment                         | local state backend, `file://$PWD/.pulumi`                                |
+| `.npm_token` (file)        | CI secret / local file, git-ignored | build-time token for `npm ci`, passed as a BuildKit secret                |
+
+The program validates these variables before it creates anything. If one is missing, `pulumi preview`
+fails and names it. The Deployment only references the Secret (`secretKeyRef`); no value appears in the
+manifest.
+
+### Zero-downtime rollout
+
+Four settings give zero failed requests:
+
+- `maxUnavailable: 0`, `maxSurge: 1` — an old pod leaves only after a new one is ready.
+- `readinessProbe` on `/readyz` (every 1 s): ready only after the 4 s warm-up, while not draining, and
+  while the database answers.
+- `livenessProbe` on a different path, `/healthz` — "temporarily not ready" never turns into a restart loop.
+- On SIGTERM the app first turns `/readyz` to 503, drains for 8 s, and only then closes the socket.
+  `terminationGracePeriodSeconds: 20` is longer than the drain.
+
+`demo:rollout` puts load on the NodePort with curl workers (one response code per line in a file), changes
+`rev` in the pod template, runs `pulumi up`, and counts the codes from the file.
+
+| Profile                                     | Requests                | Failed           | Rollout |
+|---------------------------------------------|-------------------------|------------------|---------|
+| good (probes, maxUnavailable 0, drain)      | 13,671 – 16,478 per run | 0 in most runs   | 19–20 s |
+| bad (no probes, maxUnavailable 1, no drain) | 15,596 – 15,835         | 576 – 668 (~4 %) | 6 s     |
+
+In 2 of about 12 good-profile runs, exactly 8 requests failed — one per load worker, at the same moment.
+That pattern points to a short stall of the whole host → kind path (every in-flight curl hit its 2 s
+timeout), not to a pod closing early, but it is not proven. The load generator now records the curl
+exit code of every failed request (`timeouts=` / `refused=` in the demo output) to settle it.
+
+### PDB and HPA
+
+- **PDB:** `minAvailable: 2` with 3 replicas, so one voluntary eviction is allowed: `demo:pdb` gets
+  `evict-1=201` and `evict-2=429`. `minAvailable` equal to the replica count would block every node drain.
+  The PDB only applies to the Eviction API; `kubectl delete pod` ignores it.
+- **HPA:** `autoscaling/v2`, 2–5 replicas, CPU 70 %. kind has no metrics-server, so it shows
+  `cpu: <unknown>/70%` and scales nothing. In a real cluster with metrics-server, the HPA and the Pulumi
+  program would both own `spec.replicas`: every `pulumi up` would reset the count the HPA chose. The fix is
+  to stop declaring `replicas` once an HPA owns it, or to tell Pulumi to ignore that field.
+
+### Secrets
+
+- The runtime secret travels vault → `scripts/with-secrets.sh` → Pulumi → K8s Secret (`data`, base64) →
+  `secretKeyRef`. base64 is not encryption: in a local cluster the value sits in etcd in plain text. The
+  Secret keeps the value out of git, not out of the cluster.
+- The build secret (BuildKit) protects the image; the K8s Secret protects the repository. Neither replaces
+  the other.
+- In production, an operator would sync the vault into the cluster — **External Secrets Operator** creates
+  and refreshes K8s Secrets from the vault — or the **Secrets Store CSI driver** would mount the values as
+  files without creating a Secret at all. Neither is installed here.
 
 ## Testing — integration, E2E, contract
 
